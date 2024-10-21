@@ -19,9 +19,12 @@ pub const thp_alloc_vtable = PageAllocVTable{
 };
 
 fn alloc_thp(size: usize) ?[]align(TWO_MB) u8 {
-    const aligned_size = align_up(size, 2 * 1024 * 1024);
+    if (size == 0) {
+        return null;
+    }
+    const aligned_size = align_up(size, TWO_MB);
     var ptr: ?*anyopaque = undefined;
-    if (c.posix_memalign(&ptr, 2 * 1024 * 1024, aligned_size) != 0) {
+    if (c.posix_memalign(&ptr, TWO_MB, aligned_size) != 0) {
         return null;
     }
     const data_ptr = @as([*]u8, @ptrCast(ptr));
@@ -48,18 +51,27 @@ pub const huge_page_2mb_alloc_vtable = PageAllocVTable{
 };
 
 fn alloc_huge_page_1gb(size: usize) ?[]align(TWO_MB) u8 {
+    if (size == 0) {
+        return null;
+    }
     const aligned_size = align_up(size, ONE_GB);
     const page = mmap_wrapper(aligned_size, linux.HUGETLB_FLAG_ENCODE_1GB) orelse return null;
     return page;
 }
 
 fn alloc_huge_page_2mb(size: usize) ?[]align(TWO_MB) u8 {
+    if (size == 0) {
+        return null;
+    }
     const aligned_size = align_up(size, TWO_MB);
     const page = mmap_wrapper(aligned_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
 
 fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(TWO_MB) u8 {
+    if (size == 0) {
+        return null;
+    }
     const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = true };
     const flags_int: u32 = @bitCast(flags);
     const flags_f: linux.MAP = @bitCast(flags_int | huge_page_flag);
@@ -126,4 +138,15 @@ test "smoke_alloc_huge_page_2mb" {
 test "smoke_huge_page_alloc" {
     var huge_alloc = HugePageAlloc.init(std.testing.allocator, thp_alloc_vtable);
     defer huge_alloc.deinit();
+}
+
+test "align up" {
+    try std.testing.expectEqual(align_up(0, TWO_MB), 0);
+    try std.testing.expectEqual(align_up(13, TWO_MB), TWO_MB);
+    try std.testing.expectEqual(align_up(TWO_MB, TWO_MB), TWO_MB);
+    try std.testing.expectEqual(align_up(TWO_MB + 1, TWO_MB), 2 * TWO_MB);
+    try std.testing.expectEqual(align_up(0, ONE_GB), 0);
+    try std.testing.expectEqual(align_up(13, ONE_GB), ONE_GB);
+    try std.testing.expectEqual(align_up(ONE_GB, ONE_GB), ONE_GB);
+    try std.testing.expectEqual(align_up(ONE_GB + 1, ONE_GB), 2 * ONE_GB);
 }
