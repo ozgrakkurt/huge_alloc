@@ -136,15 +136,7 @@ pub const HugePageAlloc = struct {
         self.pages.deinit();
     }
 
-    fn try_alloc_in_existing_page(self: *HugePageAlloc, size: usize, align_to: usize) ?[*]u8 {
-        if (size == 0) {
-            return null;
-        }
-
-        if (align_to > std.mem.page_size or align_to == 0) {
-            return null;
-        }
-
+    fn try_alloc_in_existing_pages(self: *HugePageAlloc, size: usize, align_to: usize) ?[*]u8 {
         for (self.free_list.items) |*free_ranges| {
             for (0..free_ranges.items.len) |free_range_idx| {
                 const free_range = free_ranges.*.items[free_range_idx];
@@ -195,11 +187,11 @@ pub const HugePageAlloc = struct {
         if (size == 0) {
             return null;
         }
-        const align_to: usize = @as(usize, 1) << log2_ptr_align;
+        const align_to: usize = align_up(@as(usize, 1) << log2_ptr_align, 64);
         if (align_to > std.mem.page_size) {
             return null;
         }
-        const existing_page_ptr = self.try_alloc_in_existing_page(size, align_to);
+        const existing_page_ptr = self.try_alloc_in_existing_pages(size, align_to);
         if (existing_page_ptr) |ptr| {
             return ptr;
         }
