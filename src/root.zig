@@ -176,7 +176,7 @@ test "smoke_huge_page_alloc" {
 test "align up" {
     const sizes = [_]usize{ TWO_MB, ONE_GB, std.mem.page_size };
 
-    inline for (sizes) |size| {
+    for (sizes) |size| {
         try std.testing.expectEqual(align_up(0, size), 0);
         try std.testing.expectEqual(align_up(13, size), size);
         try std.testing.expectEqual(align_up(size, size), size);
