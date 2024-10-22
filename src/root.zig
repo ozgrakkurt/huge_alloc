@@ -112,14 +112,16 @@ fn align_up(v: usize, align_v: usize) usize {
 
 pub const HugePageAlloc = struct {
     pages: ArrayList([]align(std.mem.page_size) u8),
-    free_list: ArrayList(ArrayList([]align(std.mem.page_size) u8)),
+    free_list: ArrayList(ArrayList([]u8)),
     page_alloc: PageAllocVTable,
+    base_alloc: Allocator,
 
     pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
         return HugePageAlloc{
             .pages = ArrayList([]align(std.mem.page_size) u8).init(base_alloc),
-            .free_list = ArrayList(ArrayList([]align(std.mem.page_size) u8)).init(base_alloc),
+            .free_list = ArrayList(ArrayList([]u8)).init(base_alloc),
             .page_alloc = v_table,
+            .base_alloc = base_alloc,
         };
     }
 
@@ -128,49 +130,118 @@ pub const HugePageAlloc = struct {
             free_l.deinit();
         }
         self.free_list.deinit();
+        for (self.pages.items) |page| {
+            self.page_alloc.free_page(page);
+        }
         self.pages.deinit();
     }
 
-    pub fn alloc(_: *anyopaque, n: usize, log2_ptr_align: u8, return_address: usize) ?[*]u8 {
+    fn try_alloc_in_existing_page(self: *HugePageAlloc, size: usize, align_to: usize) ?[*]u8 {
+        if (size == 0) {
+            return null;
+        }
+
+        if (align_to > std.mem.page_size or align_to == 0) {
+            return null;
+        }
+
+        for (self.free_list.items) |*free_ranges| {
+            for (0..free_ranges.items.len) |free_range_idx| {
+                const free_range = free_ranges.*.items[free_range_idx];
+                const pos = @intFromPtr(free_range.ptr);
+                const align_offset = align_to - (pos & (align_to - 1));
+                if (free_range.len >= align_offset + size) {
+                    var appended = false;
+                    if (align_offset > 0) {
+                        free_ranges.append(free_range.ptr[0..align_offset]) catch return null;
+                        appended = true;
+                    }
+
+                    if (align_offset + size < free_range.len) {
+                        free_ranges.append(free_range.ptr[align_offset + size .. free_range.len]) catch {
+                            if (appended) {
+                                _ = free_ranges.pop();
+                            }
+                            return null;
+                        };
+                    }
+
+                    _ = free_ranges.swapRemove(free_range_idx);
+
+                    return @ptrCast(&free_range.ptr[align_offset]);
+                }
+            }
+        }
+
+        return null;
+    }
+
+    fn alloc_on_new_page(self: *HugePageAlloc, page: []align(std.mem.page_size) u8, size: usize) ![*]u8 {
+        try self.pages.append(page);
+        errdefer _ = self.pages.pop();
+
+        var free_ranges = ArrayList([]u8).init(self.base_alloc);
+        errdefer free_ranges.deinit();
+
+        try free_ranges.append(page[size..]);
+        try self.free_list.append(free_ranges);
+
+        return @ptrCast(page.ptr);
+    }
+
+    pub fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u6, return_address: usize) ?[*]u8 {
         _ = return_address;
-        //_: *HugePageAlloc = @ptrCast(@alignCast(ctx));
-        if (n == 0) {
+        const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
+        if (size == 0) {
             return null;
         }
-        const align_to: usize = 1 << log2_ptr_align;
-        if (align_to > TWO_MB) {
+        const align_to: usize = @as(usize, 1) << log2_ptr_align;
+        if (align_to > std.mem.page_size) {
             return null;
         }
+        const existing_page_ptr = self.try_alloc_in_existing_page(size, align_to);
+        if (existing_page_ptr) |ptr| {
+            return ptr;
+        }
+
+        const page = self.page_alloc.alloc_page(size) orelse return null;
+        const ptr = self.alloc_on_new_page(page, size) catch {
+            self.page_alloc.free_page(page);
+            return null;
+        };
+        return ptr;
     }
 };
 
-test "smoke_alloc_thp" {
+test "alloc_thp" {
     const page = alloc_thp(13) orelse @panic("failed alloc");
     defer free_thp(page);
     try std.testing.expect(page.len == 2 * 1024 * 1024);
 }
 
-test "smoke_alloc_huge_page_1gb" {
+test "alloc_huge_page_1gb" {
     const page = alloc_huge_page_1gb(13) orelse return error.SkipZigTest;
     defer posix.munmap(page);
     try std.testing.expect(page.len == 1 * 1024 * 1024 * 1024);
 }
 
-test "smoke_alloc_huge_page_2mb" {
+test "alloc_huge_page_2mb" {
     const page = alloc_huge_page_2mb(13) orelse return error.SkipZigTest;
     defer posix.munmap(page);
     try std.testing.expect(page.len == 2 * 1024 * 1024);
 }
 
-test "smoke_alloc_test_page" {
+test "alloc_test_page" {
     const page = alloc_test_page(13) orelse @panic("failed alloc");
     defer free_test_page(page);
     try std.testing.expect(page.len == 1 << 21);
 }
 
-test "smoke_huge_page_alloc" {
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, thp_alloc_vtable);
+test "huge_page_alloc" {
+    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
     defer huge_alloc.deinit();
+
+    _ = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
 }
 
 test "align up" {
