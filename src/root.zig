@@ -9,8 +9,8 @@ const ONE_GB = 1 * 1024 * 1024 * 1024;
 const TWO_MB = 2 * 1024 * 1024;
 
 pub const PageAllocVTable = struct {
-    alloc_page: *const fn (size: usize) ?[]align(TWO_MB) u8,
-    free_page: *const fn (page: []align(TWO_MB) u8) void,
+    alloc_page: *const fn (size: usize) ?[]align(std.mem.page_size) u8,
+    free_page: *const fn (page: []align(std.mem.page_size) u8) void,
 };
 
 pub const thp_alloc_vtable = PageAllocVTable{
@@ -18,7 +18,7 @@ pub const thp_alloc_vtable = PageAllocVTable{
     .free_page = free_thp,
 };
 
-fn alloc_thp(size: usize) ?[]align(TWO_MB) u8 {
+fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
@@ -28,7 +28,7 @@ fn alloc_thp(size: usize) ?[]align(TWO_MB) u8 {
         return null;
     }
     const data_ptr = @as([*]u8, @ptrCast(ptr));
-    const aligned_data_ptr: [*]align(TWO_MB) u8 = @alignCast(data_ptr);
+    const aligned_data_ptr: [*]align(std.mem.page_size) u8 = @alignCast(data_ptr);
     posix.madvise(aligned_data_ptr, aligned_size, posix.MADV.HUGEPAGE) catch {
         c.free(data_ptr);
         return null;
@@ -36,7 +36,7 @@ fn alloc_thp(size: usize) ?[]align(TWO_MB) u8 {
     return aligned_data_ptr[0..aligned_size];
 }
 
-fn free_thp(page: []align(TWO_MB) u8) void {
+fn free_thp(page: []align(std.mem.page_size) u8) void {
     c.free(page.ptr);
 }
 
@@ -50,7 +50,7 @@ pub const huge_page_2mb_alloc_vtable = PageAllocVTable{
     .free_page = linux.munmap,
 };
 
-fn alloc_huge_page_1gb(size: usize) ?[]align(TWO_MB) u8 {
+fn alloc_huge_page_1gb(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
@@ -59,7 +59,34 @@ fn alloc_huge_page_1gb(size: usize) ?[]align(TWO_MB) u8 {
     return page;
 }
 
-fn alloc_huge_page_2mb(size: usize) ?[]align(TWO_MB) u8 {
+fn alloc_test_page(size: usize) ?[]align(std.mem.page_size) u8 {
+    if (size == 0) {
+        return null;
+    }
+    const aligned_size = align_up(size, TWO_MB);
+    const page = std.testing.allocator.alignedAlloc(
+        u8,
+        std.mem.page_size,
+        aligned_size,
+    ) catch return null;
+    if (page.len != aligned_size) {
+        @panic("bad alignment");
+    }
+    return @alignCast(page);
+}
+
+fn free_test_page(page: []align(std.mem.page_size) u8) void {
+    std.testing.allocator.free(
+        page,
+    );
+}
+
+pub const test_page_alloc_vtable = PageAllocVTable{
+    .alloc_page = alloc_test_page,
+    .free_page = free_test_page,
+};
+
+fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
@@ -68,7 +95,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(TWO_MB) u8 {
     return page;
 }
 
-fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(TWO_MB) u8 {
+fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
@@ -84,14 +111,14 @@ fn align_up(v: usize, align_v: usize) usize {
 }
 
 pub const HugePageAlloc = struct {
-    pages: ArrayList([]align(TWO_MB) u8),
-    free_list: ArrayList(ArrayList([]align(TWO_MB) u8)),
+    pages: ArrayList([]align(std.mem.page_size) u8),
+    free_list: ArrayList(ArrayList([]align(std.mem.page_size) u8)),
     page_alloc: PageAllocVTable,
 
     pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
         return HugePageAlloc{
-            .pages = ArrayList([]align(TWO_MB) u8).init(base_alloc),
-            .free_list = ArrayList(ArrayList([]align(TWO_MB) u8)).init(base_alloc),
+            .pages = ArrayList([]align(std.mem.page_size) u8).init(base_alloc),
+            .free_list = ArrayList(ArrayList([]align(std.mem.page_size) u8)).init(base_alloc),
             .page_alloc = v_table,
         };
     }
@@ -133,6 +160,12 @@ test "smoke_alloc_huge_page_2mb" {
     const page = alloc_huge_page_2mb(13) orelse return error.SkipZigTest;
     defer posix.munmap(page);
     try std.testing.expect(page.len == 2 * 1024 * 1024);
+}
+
+test "smoke_alloc_test_page" {
+    const page = alloc_test_page(13) orelse @panic("failed alloc");
+    defer free_test_page(page);
+    try std.testing.expect(page.len == 1 << 21);
 }
 
 test "smoke_huge_page_alloc" {
