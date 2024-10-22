@@ -174,12 +174,12 @@ test "smoke_huge_page_alloc" {
 }
 
 test "align up" {
-    try std.testing.expectEqual(align_up(0, TWO_MB), 0);
-    try std.testing.expectEqual(align_up(13, TWO_MB), TWO_MB);
-    try std.testing.expectEqual(align_up(TWO_MB, TWO_MB), TWO_MB);
-    try std.testing.expectEqual(align_up(TWO_MB + 1, TWO_MB), 2 * TWO_MB);
-    try std.testing.expectEqual(align_up(0, ONE_GB), 0);
-    try std.testing.expectEqual(align_up(13, ONE_GB), ONE_GB);
-    try std.testing.expectEqual(align_up(ONE_GB, ONE_GB), ONE_GB);
-    try std.testing.expectEqual(align_up(ONE_GB + 1, ONE_GB), 2 * ONE_GB);
+    const sizes = [_]usize{ TWO_MB, ONE_GB, std.mem.page_size };
+
+    inline for (sizes) |size| {
+        try std.testing.expectEqual(align_up(0, size), 0);
+        try std.testing.expectEqual(align_up(13, size), size);
+        try std.testing.expectEqual(align_up(size, size), size);
+        try std.testing.expectEqual(align_up(size + 1, size), 2 * size);
+    }
 }
