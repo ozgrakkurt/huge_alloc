@@ -380,6 +380,7 @@ test "align_offset" {
             try std.testing.expectEqual((alignment_offset + pos) % align_to, 0);
             try std.testing.expectEqual(align_offset(pos + alignment_offset, align_to), 0);
             try std.testing.expectEqual(align_up(pos, align_to), pos + alignment_offset);
+            try std.testing.expect(alignment_offset < align_to);
         }
     }
 }
