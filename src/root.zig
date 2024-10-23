@@ -103,10 +103,6 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
     return @alignCast(page);
 }
 
-fn align_up(v: usize, align_v: usize) usize {
-    return (v + align_v - 1) & ~(align_v - 1);
-}
-
 pub const HugePageAlloc = struct {
     pages: ArrayList([]align(std.mem.page_size) u8),
     free_list: ArrayList(ArrayList([]u8)),
@@ -138,16 +134,16 @@ pub const HugePageAlloc = struct {
             for (0..free_ranges.items.len) |free_range_idx| {
                 const free_range = free_ranges.*.items[free_range_idx];
                 const pos = @intFromPtr(free_range.ptr);
-                const align_offset = align_to - (pos & (align_to - 1));
-                if (free_range.len >= align_offset + size) {
+                const alignment_offset = align_offset(pos, align_to);
+                if (free_range.len >= alignment_offset + size) {
                     var appended = false;
-                    if (align_offset > 0) {
-                        free_ranges.append(free_range.ptr[0..align_offset]) catch return null;
+                    if (alignment_offset > 0) {
+                        free_ranges.append(free_range.ptr[0..alignment_offset]) catch return null;
                         appended = true;
                     }
 
-                    if (align_offset + size < free_range.len) {
-                        free_ranges.append(free_range.ptr[align_offset + size .. free_range.len]) catch {
+                    if (alignment_offset + size < free_range.len) {
+                        free_ranges.append(free_range.ptr[alignment_offset + size .. free_range.len]) catch {
                             if (appended) {
                                 _ = free_ranges.pop();
                             }
@@ -157,7 +153,7 @@ pub const HugePageAlloc = struct {
 
                     _ = free_ranges.swapRemove(free_range_idx);
 
-                    return @ptrCast(&free_range.ptr[align_offset]);
+                    return @ptrCast(&free_range.ptr[alignment_offset]);
                 }
             }
         }
@@ -304,6 +300,14 @@ const allocator_vtable = Allocator.VTable{
     .free = HugePageAlloc.free,
 };
 
+fn align_offset(pos: usize, align_to: usize) usize {
+    return align_up(pos, align_to) - pos;
+}
+
+fn align_up(v: usize, align_v: usize) usize {
+    return (v + align_v - 1) & ~(align_v - 1);
+}
+
 test "alloc_thp" {
     const page = alloc_thp(13) orelse @panic("failed alloc");
     defer free_thp(page);
@@ -363,5 +367,19 @@ test "align up" {
         try std.testing.expectEqual(align_up(13, size), size);
         try std.testing.expectEqual(align_up(size, size), size);
         try std.testing.expectEqual(align_up(size + 1, size), 2 * size);
+    }
+}
+
+test "align_offset" {
+    const align_to_values = [_]usize{ 2, 4, TWO_MB, ONE_GB, std.mem.page_size };
+    const positions = [_]usize{ 0, 1, 3, 5, TWO_MB, ONE_GB, TWO_MB + 1, TWO_MB - 1, ONE_GB + 1, ONE_GB - 1, std.mem.page_size };
+
+    for (align_to_values) |align_to| {
+        for (positions) |pos| {
+            const alignment_offset = align_offset(pos, align_to);
+            try std.testing.expectEqual((alignment_offset + pos) % align_to, 0);
+            try std.testing.expectEqual(align_offset(pos + alignment_offset, align_to), 0);
+            try std.testing.expectEqual(align_up(pos, align_to), pos + alignment_offset);
+        }
     }
 }
