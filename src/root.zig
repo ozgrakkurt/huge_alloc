@@ -69,9 +69,6 @@ fn alloc_test_page(size: usize) ?[]align(std.mem.page_size) u8 {
         std.mem.page_size,
         aligned_size,
     ) catch return null;
-    if (page.len != aligned_size) {
-        @panic("bad alignment");
-    }
     return @alignCast(page);
 }
 
