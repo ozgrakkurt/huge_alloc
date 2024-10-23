@@ -281,6 +281,14 @@ test "huge_page_alloc" {
     const ptr = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
     const buf = ptr[0..12];
     defer HugePageAlloc.free(@ptrCast(&huge_alloc), buf, 4, 0);
+
+    const ptr2 = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 13, 8, 0) orelse @panic("failed alloc");
+    const buf2 = ptr2[0..13];
+    defer HugePageAlloc.free(@ptrCast(&huge_alloc), buf2, 8, 0);
+
+    const ptr3 = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 13, 8, 0) orelse @panic("failed alloc");
+    const buf3 = ptr3[0..13];
+    HugePageAlloc.alloc.free(@ptrCast(&huge_alloc), buf3, 8, 0);
 }
 
 test "align up" {
