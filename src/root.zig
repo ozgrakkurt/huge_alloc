@@ -219,7 +219,7 @@ pub const HugePageAlloc = struct {
                 const free_range_start_addr = @intFromPtr(free_range.ptr);
                 if (free_range_start_addr == end_addr) {
                     if (free_range.len + buf.len > new_len) {
-                        const offset = free_range.len - (new_len - buf.len);
+                        const offset = new_len - buf.len;
                         free_ranges.items[free_range_idx] = free_range[offset..];
                         return true;
                     } else if (free_range.len + buf.len == new_len) {
