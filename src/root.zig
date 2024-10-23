@@ -258,10 +258,16 @@ pub const HugePageAlloc = struct {
                 if (free_range_start_addr == end_addr) {
                     range_to_insert = range_to_insert.ptr[0 .. range_to_insert.len + free_range.len];
                     _ = free_ranges.swapRemove(free_range_idx);
+                    if (found) {
+                        break;
+                    }
                     found = true;
                 } else if (free_range_end_addr == start_addr) {
                     range_to_insert = free_range.ptr[0 .. range_to_insert.len + free_range.len];
                     _ = free_ranges.swapRemove(free_range_idx);
+                    if (found) {
+                        break;
+                    }
                     found = true;
                 } else {
                     free_range_idx += 1;
@@ -286,14 +292,16 @@ pub const HugePageAlloc = struct {
 
     pub fn make_allocator(self: *HugePageAlloc) Allocator {
         return Allocator{
-            .vtable = &.{
-                .alloc = HugePageAlloc.alloc,
-                .resize = HugePageAlloc.resize,
-                .free = HugePageAlloc.free,
-            },
+            .vtable = &allocator_vtable,
             .ptr = self,
         };
     }
+};
+
+const allocator_vtable = Allocator.VTable{
+    .alloc = HugePageAlloc.alloc,
+    .resize = HugePageAlloc.resize,
+    .free = HugePageAlloc.free,
 };
 
 test "alloc_thp" {
