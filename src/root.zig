@@ -284,7 +284,7 @@ pub const HugePageAlloc = struct {
         @panic("bad free, page not found");
     }
 
-    pub fn make_alloc(self: *HugePageAlloc) Allocator {
+    pub fn make_allocator(self: *HugePageAlloc) Allocator {
         return Allocator{
             .vtable = &.{
                 .alloc = HugePageAlloc.alloc,
@@ -336,7 +336,7 @@ test "huge_page_alloc" {
     const buf3 = ptr3[0..13];
     HugePageAlloc.free(@ptrCast(&huge_alloc), buf3, 8, 0);
 
-    const alloc = huge_alloc.make_alloc();
+    const alloc = huge_alloc.make_allocator();
 
     var list = ArrayList(u64).init(alloc);
     try list.append(12);
