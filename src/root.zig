@@ -203,8 +203,7 @@ pub const HugePageAlloc = struct {
 
     fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, return_address: usize) bool {
         if (buf.len > new_len) {
-            const offset = buf.len - new_len;
-            HugePageAlloc.free(ctx, buf[offset..], log2_buf_align, return_address);
+            HugePageAlloc.free(ctx, buf[new_len..], log2_buf_align, return_address);
             return true;
         }
 
