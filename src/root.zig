@@ -180,8 +180,7 @@ pub const HugePageAlloc = struct {
         if (size == 0) {
             return null;
         }
-        const align_to_src: usize = @as(usize, 1) << @as(Allocator.Log2Align, @intCast(log2_ptr_align));
-        const align_to = @max(align_to_src, 64);
+        const align_to: usize = @as(usize, 1) << @as(Allocator.Log2Align, @intCast(log2_ptr_align));
         if (align_to > std.mem.page_size) {
             return null;
         }
