@@ -200,6 +200,54 @@ pub const HugePageAlloc = struct {
         };
         return ptr;
     }
+
+    pub fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, return_address: usize) void {
+        _ = buf_align;
+        _ = return_address;
+        _ = buf_align;
+
+        const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
+
+        const start_addr: usize = @intFromPtr(buf.ptr);
+        const end_addr: usize = start_addr + buf.len;
+
+        for (0..self.free_list.items.len) |page_idx| {
+            const free_ranges = &self.free_list.items[page_idx];
+            var range_to_insert = buf;
+            var free_range_idx = @as(usize, 0);
+            var found = false;
+            while (free_range_idx < free_ranges.items.len) {
+                const free_range = free_ranges.items[free_range_idx];
+                const free_range_start_addr = @intFromPtr(free_range.ptr);
+                const free_range_end_addr = free_range_start_addr + free_range.len;
+                if (free_range_start_addr == end_addr) {
+                    range_to_insert = range_to_insert.ptr[0 .. range_to_insert.len + free_range.len];
+                    _ = free_ranges.swapRemove(free_range_idx);
+                    found = true;
+                } else if (free_range_end_addr == start_addr) {
+                    range_to_insert = free_range.ptr[0 .. range_to_insert.len + free_range.len];
+                    _ = free_ranges.swapRemove(free_range_idx);
+                    found = true;
+                } else {
+                    free_range_idx += 1;
+                }
+            }
+            if (found) {
+                const page = self.pages.items[page_idx];
+                if (range_to_insert.ptr == page.ptr and range_to_insert.len == page.len) {
+                    self.page_alloc.free_page(page);
+                    _ = self.pages.swapRemove(page_idx);
+                    const free_l = self.free_list.swapRemove(page_idx);
+                    free_l.deinit();
+                } else {
+                    free_ranges.append(range_to_insert) catch unreachable;
+                }
+                return;
+            }
+        }
+
+        @panic("bad free, page not found");
+    }
 };
 
 test "alloc_thp" {
@@ -230,7 +278,9 @@ test "huge_page_alloc" {
     var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
     defer huge_alloc.deinit();
 
-    _ = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
+    const ptr = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
+    const buf = ptr[0..12];
+    defer HugePageAlloc.free(@ptrCast(&huge_alloc), buf, 4, 0);
 }
 
 test "align up" {
