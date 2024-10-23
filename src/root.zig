@@ -178,13 +178,13 @@ pub const HugePageAlloc = struct {
         return @ptrCast(page.ptr);
     }
 
-    pub fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u6, return_address: usize) ?[*]u8 {
+    fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
         if (size == 0) {
             return null;
         }
-        const align_to: usize = align_up(@as(usize, 1) << log2_ptr_align, 64);
+        const align_to: usize = @as(usize, 1) << @as(Allocator.Log2Align, @intCast(log2_ptr_align));
         if (align_to > std.mem.page_size) {
             return null;
         }
@@ -201,10 +201,43 @@ pub const HugePageAlloc = struct {
         return ptr;
     }
 
-    pub fn free(ctx: *anyopaque, buf: []u8, buf_align: u8, return_address: usize) void {
-        _ = buf_align;
+    fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, return_address: usize) bool {
+        _ = log2_buf_align;
         _ = return_address;
-        _ = buf_align;
+
+        const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
+
+        const end_addr: usize = @intFromPtr(buf.ptr) + buf.len;
+
+        if (buf.len >= new_len) {
+            return false;
+        }
+
+        for (self.free_list.items) |*free_ranges| {
+            for (0..free_ranges.items.len) |free_range_idx| {
+                const free_range = free_ranges.items[free_range_idx];
+                const free_range_start_addr = @intFromPtr(free_range.ptr);
+                if (free_range_start_addr == end_addr) {
+                    if (free_range.len + buf.len > new_len) {
+                        const offset = free_range.len - (new_len - buf.len);
+                        free_ranges.items[free_range_idx] = free_range[offset..];
+                        return true;
+                    } else if (free_range.len + buf.len == new_len) {
+                        _ = free_ranges.swapRemove(free_range_idx);
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    pub fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, return_address: usize) void {
+        _ = log2_buf_align;
+        _ = return_address;
 
         const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
 
@@ -248,6 +281,17 @@ pub const HugePageAlloc = struct {
 
         @panic("bad free, page not found");
     }
+
+    pub fn make_alloc(self: *HugePageAlloc) Allocator {
+        return Allocator{
+            .vtable = &.{
+                .alloc = HugePageAlloc.alloc,
+                .resize = HugePageAlloc.resize,
+                .free = HugePageAlloc.free,
+            },
+            .ptr = self,
+        };
+    }
 };
 
 test "alloc_thp" {
@@ -288,7 +332,17 @@ test "huge_page_alloc" {
 
     const ptr3 = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 13, 8, 0) orelse @panic("failed alloc");
     const buf3 = ptr3[0..13];
-    HugePageAlloc.alloc.free(@ptrCast(&huge_alloc), buf3, 8, 0);
+    HugePageAlloc.free(@ptrCast(&huge_alloc), buf3, 8, 0);
+
+    const alloc = huge_alloc.make_alloc();
+
+    var list = ArrayList(u64).init(alloc);
+    try list.append(12);
+    try list.append(13);
+    for (0..257) |i| {
+        try list.append(i);
+    }
+    defer list.deinit();
 }
 
 test "align up" {
