@@ -56,7 +56,7 @@ fn alloc_test_page(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
+    const aligned_size = align_up(size, std.mem.page_size);
     const page = std.testing.allocator.alignedAlloc(
         u8,
         std.mem.page_size,
@@ -341,7 +341,7 @@ test "alloc_huge_page_2mb" {
 test "alloc_test_page" {
     const page = alloc_test_page(13) orelse @panic("failed alloc");
     defer free_test_page(page);
-    try std.testing.expect(page.len == 1 << 21);
+    try std.testing.expect(page.len == std.mem.page_size);
 }
 
 test "huge_page_alloc" {
@@ -442,7 +442,7 @@ fn to_fuzz(input: []const u8) anyerror!void {
             }
 
             alloc.free(arr.*);
-            arr.* = try alloc.alloc(u8, len + 1024);
+            arr.* = try alloc.alloc(u8, len);
         }
 
         for (arrays.items, 0..) |a, a_i| {
