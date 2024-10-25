@@ -245,6 +245,17 @@ pub const HugePageAlloc = struct {
             var range_to_insert = buf;
             var free_range_idx = @as(usize, 0);
             var found = false;
+
+            {
+                const page = self.pages.items[page_idx];
+                const page_addr = @intFromPtr(page.ptr);
+                const buf_addr = @intFromPtr(buf.ptr);
+                const contains = buf_addr >= page_addr and page_addr + page.len >= buf_addr + buf.len;
+                if (!contains) {
+                    continue;
+                }
+            }
+
             while (free_range_idx < free_ranges.items.len) {
                 const free_range = free_ranges.items[free_range_idx];
                 const free_range_start_addr = @intFromPtr(free_range.ptr);
@@ -277,8 +288,10 @@ pub const HugePageAlloc = struct {
                 } else {
                     free_ranges.append(range_to_insert) catch unreachable;
                 }
-                return;
+            } else {
+                free_ranges.append(buf) catch @panic("unrecoverable failure");
             }
+            return;
         }
 
         @panic("bad free, page not found");
