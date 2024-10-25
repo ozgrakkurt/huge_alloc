@@ -383,3 +383,14 @@ test "align_offset" {
         }
     }
 }
+
+test "test allocator with std" {
+    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    defer huge_alloc.deinit();
+    const alloc = huge_alloc.make_allocator();
+
+    try std.heap.testAllocator(alloc);
+    try std.heap.testAllocatorAligned(alloc);
+    try std.heap.testAllocatorLargeAlignment(alloc);
+    try std.heap.testAllocatorAlignedShrink(alloc);
+}
