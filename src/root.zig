@@ -21,8 +21,9 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB * 4);
-    const page = mmap_wrapper(aligned_size, 0) orelse return null;
+    const aligned_size = align_up(size, TWO_MB);
+    const alloc_size = @max(aligned_size, TWO_MB * 4);
+    const page = mmap_wrapper(alloc_size, 0) orelse return null;
     const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
     const thp_section = page[ptr_alignment_offset..];
     posix.madvise(@alignCast(thp_section.ptr), thp_section.len, posix.MADV.HUGEPAGE) catch {
@@ -79,8 +80,9 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB * 4);
-    const page = mmap_wrapper(aligned_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
+    const aligned_size = align_up(size, TWO_MB);
+    const alloc_size = @max(aligned_size, 4 * TWO_MB);
+    const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
 
