@@ -2,7 +2,6 @@ const std = @import("std");
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
-const c = std.c;
 const linux = std.os.linux;
 
 const ONE_GB = 1 * 1024 * 1024 * 1024;
@@ -15,39 +14,32 @@ pub const PageAllocVTable = struct {
 
 pub const thp_alloc_vtable = PageAllocVTable{
     .alloc_page = alloc_thp,
-    .free_page = free_thp,
+    .free_page = posix.munmap,
 };
 
 fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
-    var ptr: ?*anyopaque = undefined;
-    if (c.posix_memalign(&ptr, TWO_MB, aligned_size) != 0) {
-        return null;
-    }
-    const data_ptr = @as([*]u8, @ptrCast(ptr));
-    const aligned_data_ptr: [*]align(std.mem.page_size) u8 = @alignCast(data_ptr);
-    posix.madvise(aligned_data_ptr, aligned_size, posix.MADV.HUGEPAGE) catch {
-        c.free(data_ptr);
+    const aligned_size = align_up(size, TWO_MB * 8);
+    const page = mmap_wrapper(aligned_size, 0) orelse return null;
+    const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
+    const thp_section = page[ptr_alignment_offset..];
+    posix.madvise(@alignCast(thp_section.ptr), thp_section.len, posix.MADV.HUGEPAGE) catch {
+        posix.munmap(page);
         return null;
     };
-    return aligned_data_ptr[0..aligned_size];
-}
-
-fn free_thp(page: []align(std.mem.page_size) u8) void {
-    c.free(page.ptr);
+    return page;
 }
 
 pub const huge_page_1gb_alloc_vtable = PageAllocVTable{
     .alloc_page = alloc_huge_page_1gb,
-    .free_page = linux.munmap,
+    .free_page = posix.munmap,
 };
 
 pub const huge_page_2mb_alloc_vtable = PageAllocVTable{
     .alloc_page = alloc_huge_page_2mb,
-    .free_page = linux.munmap,
+    .free_page = posix.munmap,
 };
 
 fn alloc_huge_page_1gb(size: usize) ?[]align(std.mem.page_size) u8 {
@@ -96,7 +88,7 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
     if (size == 0) {
         return null;
     }
-    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = true };
+    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = huge_page_flag != 0, .POPULATE = true };
     const flags_int: u32 = @bitCast(flags);
     const flags_f: linux.MAP = @bitCast(flags_int | huge_page_flag);
     const page = posix.mmap(null, size, posix.PROT.READ | posix.PROT.WRITE, flags_f, -1, 0) catch return null;
@@ -198,6 +190,10 @@ pub const HugePageAlloc = struct {
     }
 
     fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, return_address: usize) bool {
+        if (new_len == 0) {
+            return false;
+        }
+
         if (buf.len > new_len) {
             HugePageAlloc.free(ctx, buf[new_len..], log2_buf_align, return_address);
             return true;
@@ -310,8 +306,9 @@ fn align_up(v: usize, align_v: usize) usize {
 
 test "alloc_thp" {
     const page = alloc_thp(13) orelse @panic("failed alloc");
-    defer free_thp(page);
-    try std.testing.expect(page.len == 2 * 1024 * 1024);
+    defer posix.munmap(page);
+    try std.testing.expect(page.len > 13);
+    try std.testing.expect(page.len % std.mem.page_size == 0);
 }
 
 test "alloc_huge_page_1gb" {
