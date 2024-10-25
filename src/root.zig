@@ -407,3 +407,65 @@ test "test allocator with std" {
     try std.heap.testAllocatorLargeAlignment(alloc);
     try std.heap.testAllocatorAlignedShrink(alloc);
 }
+
+fn to_fuzz(input: []const u8) anyerror!void {
+    if (input.len == 0) {
+        return;
+    }
+
+    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    defer huge_alloc.deinit();
+    const alloc = huge_alloc.make_allocator();
+
+    {
+        var arrays = ArrayList([]u8).init(alloc);
+        defer arrays.deinit();
+        defer for (arrays.items) |arr| {
+            alloc.free(arr);
+        };
+
+        for (0..input.len - 4) |i| {
+            const len = @min(TWO_MB * 8, std.mem.readInt(usize, @ptrCast(input[i .. i + 4]), .big));
+
+            try arrays.append(try alloc.alloc(u8, len));
+        }
+
+        for (4..input.len) |i| {
+            const idx = input.len - i - 1;
+
+            const len = @min(TWO_MB, std.mem.readInt(usize, @ptrCast(input[idx .. idx + 4]), .big));
+
+            const arr: *[]u8 = &arrays.items[idx];
+
+            if (alloc.resize(arr.*, len)) {
+                arr.* = arr.*[0..len];
+            }
+
+            alloc.free(arr.*);
+            arr.* = try alloc.alloc(u8, len + 1024);
+        }
+
+        for (arrays.items, 0..) |a, a_i| {
+            for (arrays.items, 0..) |b, b_i| {
+                if (a_i == b_i) {
+                    continue;
+                }
+                try std.testing.expect(!overlaps(a, b));
+            }
+        }
+    }
+    try std.testing.expectEqual(huge_alloc.pages.items.len, 0);
+}
+
+fn overlaps(a: []u8, b: []u8) bool {
+    const a_start_addr = @intFromPtr(a.ptr);
+    const a_end_addr = a_start_addr + a.len;
+    const b_start_addr = @intFromPtr(b.ptr);
+    const b_end_addr = b_start_addr + b.len;
+
+    return (a_start_addr >= b_start_addr and a_start_addr < b_end_addr) or (b_start_addr >= a_start_addr and b_start_addr < a_end_addr);
+}
+
+test "fuzz alloc" {
+    try std.testing.fuzz(to_fuzz, .{});
+}
