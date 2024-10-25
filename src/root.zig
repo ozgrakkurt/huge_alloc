@@ -409,7 +409,7 @@ test "test allocator with std" {
 }
 
 fn to_fuzz(input: []const u8) anyerror!void {
-    if (input.len == 0) {
+    if (input.len < 4) {
         return;
     }
 
