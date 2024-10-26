@@ -54,6 +54,8 @@ const huge_alloc_alloc = huge_allocator.make_allocator();
 This repository has some benchmarks that can be run with `zig build runbench -Doptimize=ReleaseSafe`.
 The benchmark allocates some arrays and fills them with random numbers. Then compresses/decompresses these arrays and does some vertical and horizontal summation on them. This is intended to simulate some worload like loading some columnar data (like Apache Arrow) from some files (like Parquet) from disk, decompressing them then doing some light computation.
 
+This benchmark shows a big improvement compared to standard allocators. The difference is bigger if individual allocations are smaller and there are a large amount of allocations. The difference goes down as individual allocations are bigger and the amount of allocations are smaller.
+
 Example output:
 ```
 Running huge_alloc with buf_size = 128
