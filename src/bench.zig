@@ -31,8 +31,8 @@ pub fn main() void {
     const allocators = [_]Allocator{ huge_alloc_alloc, std.heap.page_allocator, gpa_alloc, huge_2mb_alloc, huge_1gb_alloc };
 
     const num_runs = 50;
-    const buf_sizes = [_]usize{ 128, 128 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
-    const mem_use = 3 * 1024 * 1024 / 2;
+    const buf_sizes = [_]usize{ 128, 128 * 1024, 1024 * 1024, 4 * 1024 * 1024, 10 * 1024 * 1024, 12 * 1024 * 1024 };
+    const mem_use = 2 * 1024 * 1024;
 
     for (buf_sizes) |buf_size| {
         for (names, allocators) |name, alloc| {
