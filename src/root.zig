@@ -98,7 +98,7 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
 }
 
 pub const Config = struct {
-    free_after: usize = ONE_GB,
+    free_after: usize = std.math.maxInt(usize),
 };
 
 pub const HugePageAlloc = struct {
