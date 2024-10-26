@@ -22,7 +22,7 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, TWO_MB * 4);
+    const alloc_size = @max(aligned_size, TWO_MB * 8);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
     const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
     const thp_section = page[ptr_alignment_offset..];

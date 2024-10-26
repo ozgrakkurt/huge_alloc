@@ -7,24 +7,45 @@ const Timer = std.time.Timer;
 const sort = std.sort;
 const doNotOptimizeAway = std.mem.doNotOptimizeAway;
 
-pub fn main() !void {
+pub fn main() void {
     var huge_allocator = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
     defer huge_allocator.deinit();
     const huge_alloc_alloc = huge_allocator.make_allocator();
 
-    const num_runs = 50;
-    const buf_size = 1024 * 1024; // *8 so it will be 8 MB
-    const num_bufs = 16;
-    const benches = [_]Bench{ .{ .name = "huge_alloc", .alloc = huge_alloc_alloc, .num_runs = num_runs, .buf_size = buf_size, .num_bufs = num_bufs }, .{
-        .name = "page_alloc",
-        .alloc = std.heap.page_allocator,
-        .num_runs = num_runs,
-        .buf_size = buf_size,
-        .num_bufs = num_bufs,
-    } };
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const gpa_alloc = gpa.allocator();
+    defer {
+        const deinit_status = gpa.deinit();
+        if (deinit_status == .leak) @panic("TEST FAIL");
+    }
 
-    for (benches) |b| {
-        try runBench(&b);
+    var huge_allocator_2mb = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
+    defer huge_allocator_2mb.deinit();
+    const huge_2mb_alloc = huge_allocator_2mb.make_allocator();
+
+    var huge_allocator_1gb = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
+    defer huge_allocator_1gb.deinit();
+    const huge_1gb_alloc = huge_allocator_1gb.make_allocator();
+
+    const names = [_][]const u8{ "huge_alloc", "page_alloc", "general_purpose_alloc", "huge_2mb_alloc", "huge_1gb_alloc" };
+    const allocators = [_]Allocator{ huge_alloc_alloc, std.heap.page_allocator, gpa_alloc, huge_2mb_alloc, huge_1gb_alloc };
+
+    const num_runs = 50;
+    const buf_sizes = [_]usize{ 128, 128 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
+    const num_bufs = 32;
+
+    for (buf_sizes) |buf_size| {
+        for (names, allocators) |name, alloc| {
+            runBench(&Bench{
+                .name = name,
+                .alloc = alloc,
+                .num_runs = num_runs,
+                .buf_size = buf_size,
+                .num_bufs = num_bufs,
+            }) catch {
+                std.debug.print("Failed to run {s} with buf_suze = {d}\n", .{ name, buf_size });
+            };
+        }
     }
 }
 
@@ -42,7 +63,7 @@ fn runBench(bench: *const Bench) !void {
         return;
     }
 
-    std.debug.print("Running {s}\n", .{bench.name});
+    std.debug.print("Running {s} with buf_size = {d}\n", .{ bench.name, bench.buf_size });
 
     var timings = ArrayList(u64).init(bench.alloc);
     defer timings.deinit();
