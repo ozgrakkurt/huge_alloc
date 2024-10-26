@@ -22,7 +22,7 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, TWO_MB * 8);
+    const alloc_size = @max(aligned_size, TWO_MB * 16);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
     const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
     const thp_section = page[ptr_alignment_offset..];
@@ -81,7 +81,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, 4 * TWO_MB);
+    const alloc_size = @max(aligned_size, 16 * TWO_MB);
     const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
@@ -97,18 +97,28 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
     return @alignCast(page);
 }
 
+pub const Config = struct {
+    free_after: usize = ONE_GB,
+};
+
 pub const HugePageAlloc = struct {
     pages: ArrayList([]align(std.mem.page_size) u8),
     free_list: ArrayList(ArrayList([]u8)),
     page_alloc: PageAllocVTable,
     base_alloc: Allocator,
+    free_after: usize,
 
     pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
+        return HugePageAlloc.init_with_config(base_alloc, v_table, &.{});
+    }
+
+    pub fn init_with_config(base_alloc: Allocator, v_table: PageAllocVTable, cfg: *const Config) HugePageAlloc {
         return HugePageAlloc{
             .pages = ArrayList([]align(std.mem.page_size) u8).init(base_alloc),
             .free_list = ArrayList(ArrayList([]u8)).init(base_alloc),
             .page_alloc = v_table,
             .base_alloc = base_alloc,
+            .free_after = cfg.free_after,
         };
     }
 
@@ -280,7 +290,7 @@ pub const HugePageAlloc = struct {
             }
             if (found) {
                 const page = self.pages.items[page_idx];
-                if (range_to_insert.ptr == page.ptr and range_to_insert.len == page.len) {
+                if (range_to_insert.ptr == page.ptr and range_to_insert.len == page.len and self.should_free()) {
                     self.page_alloc.free_page(page);
                     _ = self.pages.swapRemove(page_idx);
                     const free_l = self.free_list.swapRemove(page_idx);
@@ -295,6 +305,16 @@ pub const HugePageAlloc = struct {
         }
 
         @panic("bad free, page not found");
+    }
+
+    fn should_free(self: *HugePageAlloc) bool {
+        var total_alloc_size = @as(usize, 0);
+
+        for (self.pages.items) |page| {
+            total_alloc_size +|= page.len;
+        }
+
+        return total_alloc_size >= self.free_after;
     }
 
     pub fn make_allocator(self: *HugePageAlloc) Allocator {
@@ -329,19 +349,19 @@ test "alloc_thp" {
 test "alloc_huge_page_1gb" {
     const page = alloc_huge_page_1gb(13) orelse return error.SkipZigTest;
     defer posix.munmap(page);
-    try std.testing.expect(page.len == 1 * 1024 * 1024 * 1024);
+    try std.testing.expect(page.len >= 1 * 1024 * 1024 * 1024);
 }
 
 test "alloc_huge_page_2mb" {
     const page = alloc_huge_page_2mb(13) orelse return error.SkipZigTest;
     defer posix.munmap(page);
-    try std.testing.expect(page.len == 2 * 1024 * 1024);
+    try std.testing.expect(page.len >= 2 * 1024 * 1024);
 }
 
 test "alloc_test_page" {
     const page = alloc_test_page(13) orelse @panic("failed alloc");
     defer free_test_page(page);
-    try std.testing.expect(page.len == std.mem.page_size);
+    try std.testing.expect(page.len >= std.mem.page_size);
 }
 
 test "huge_page_alloc" {
@@ -454,7 +474,6 @@ fn to_fuzz(input: []const u8) anyerror!void {
             }
         }
     }
-    try std.testing.expectEqual(huge_alloc.pages.items.len, 0);
 }
 
 fn overlaps(a: []u8, b: []u8) bool {

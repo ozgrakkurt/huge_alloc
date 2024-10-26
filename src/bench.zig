@@ -32,7 +32,7 @@ pub fn main() void {
 
     const num_runs = 50;
     const buf_sizes = [_]usize{ 128, 128 * 1024, 1024 * 1024, 4 * 1024 * 1024 };
-    const num_bufs = 32;
+    const mem_use = 3 * 1024 * 1024 / 2;
 
     for (buf_sizes) |buf_size| {
         for (names, allocators) |name, alloc| {
@@ -41,9 +41,9 @@ pub fn main() void {
                 .alloc = alloc,
                 .num_runs = num_runs,
                 .buf_size = buf_size,
-                .num_bufs = num_bufs,
+                .num_bufs = mem_use / buf_size,
             }) catch {
-                std.debug.print("Failed to run {s} with buf_suze = {d}\n", .{ name, buf_size });
+                std.debug.print("Failed to run {s} with buf_size = {d}\n", .{ name, buf_size });
             };
         }
     }
@@ -76,7 +76,7 @@ fn runBench(bench: *const Bench) !void {
 
     sort.pdq(u64, timings.items, {}, sort.asc(u64));
 
-    std.debug.print("Median running time was {d}ns\n", .{timings.items[timings.items.len / 2]});
+    std.debug.print("Median running time was {d}μs\n", .{timings.items[timings.items.len / 2] / 1000});
 }
 
 fn doOneRun(bench: *const Bench) !u64 {
@@ -153,14 +153,14 @@ fn doOneRun(bench: *const Bench) !u64 {
 
     for (decompressed) |buf| {
         for (0..bench.buf_size) |i| {
-            accum[i] +|= buf[i];
+            accum[i] +%= buf[i];
         }
     }
 
     var acc = @as(u64, 0);
 
     for (accum) |x| {
-        acc +|= x;
+        acc +%= x;
     }
 
     return acc;
