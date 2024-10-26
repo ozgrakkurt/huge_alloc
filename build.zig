@@ -29,6 +29,26 @@ pub fn build(b: *std.Build) void {
     // running `zig build`).
     b.installArtifact(lib);
 
+    const bench = b.addExecutable(.{
+        .name = "bench",
+        .root_source_file = b.path("src/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const zstd_dependency = b.dependency("zstd", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    bench.linkLibrary(zstd_dependency.artifact("zstd"));
+
+    b.installArtifact(bench);
+
+    const run_bench = b.addRunArtifact(bench);
+
+    const run_bench_step = b.step("runbench", "Run the benchmark application");
+    run_bench_step.dependOn(&run_bench.step);
+
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
     const lib_unit_tests = b.addTest(.{
