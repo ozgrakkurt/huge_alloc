@@ -2,11 +2,14 @@
 
 Memory allocator for allocating (huge) pages of memory. Designed for use cases like web servers, databases and data tools.
 
+WARNING: This library is intended to only work on linux.
+
 ## Features
 - Transparent huge page friendly allocation pattern.
 - Easy way to allocate explicit huge pages with 2MB or 1GB size.
 - Option to specify how pages are freed based on total allocation size.
 - Very simple behavior, simple and easy to debug code.
+- No libc dependency.
 
 ## Why is it good?
 This allocator allocates very large sized pages of memory, tries to minimize page faults and TLB cache mises. 
