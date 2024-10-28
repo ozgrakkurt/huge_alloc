@@ -1,6 +1,6 @@
 const std = @import("std");
 const zstd = @cImport(@cInclude("zstd.h"));
-const huge_alloc = @import("root.zig");
+const huge_alloc = @import("huge_alloc");
 const Allocator = std.mem.Allocator;
 const ArrayList = std.ArrayList;
 const Timer = std.time.Timer;
