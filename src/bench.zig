@@ -7,13 +7,13 @@ const Timer = std.time.Timer;
 const sort = std.sort;
 const doNotOptimizeAway = std.mem.doNotOptimizeAway;
 
-const num_threads = 12;
+const NUM_THREADS = 8;
 
 pub fn main() !void {
-    var huge_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
-    var huge_alloc_allocs: [num_threads]Allocator = undefined;
+    var huge_allocators: [NUM_THREADS]huge_alloc.HugePageAlloc = undefined;
+    var huge_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
-    for (0..num_threads) |i| {
+    for (0..NUM_THREADS) |i| {
         huge_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
         huge_alloc_allocs[i] = huge_allocators[i].make_allocator();
     }
@@ -22,10 +22,10 @@ pub fn main() !void {
         a.deinit();
     };
 
-    var huge_2mb_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
-    var huge_2mb_alloc_allocs: [num_threads]Allocator = undefined;
+    var huge_2mb_allocators: [NUM_THREADS]huge_alloc.HugePageAlloc = undefined;
+    var huge_2mb_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
-    for (0..num_threads) |i| {
+    for (0..NUM_THREADS) |i| {
         huge_2mb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
         huge_2mb_alloc_allocs[i] = huge_2mb_allocators[i].make_allocator();
     }
@@ -34,10 +34,10 @@ pub fn main() !void {
         a.deinit();
     };
 
-    var huge_1gb_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
-    var huge_1gb_alloc_allocs: [num_threads]Allocator = undefined;
+    var huge_1gb_allocators: [NUM_THREADS]huge_alloc.HugePageAlloc = undefined;
+    var huge_1gb_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
-    for (0..num_threads) |i| {
+    for (0..NUM_THREADS) |i| {
         huge_1gb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
         huge_1gb_alloc_allocs[i] = huge_1gb_allocators[i].make_allocator();
     }
@@ -67,9 +67,9 @@ pub fn main() !void {
     const allocs = if (std.mem.eql(u8, alloc_name, "huge_alloc"))
         huge_alloc_allocs
     else if (std.mem.eql(u8, alloc_name, "page_alloc"))
-        .{std.heap.page_allocator} ** num_threads
+        .{std.heap.page_allocator} ** NUM_THREADS
     else if (std.mem.eql(u8, alloc_name, "general_purpose_alloc"))
-        .{gpa_alloc} ** num_threads
+        .{gpa_alloc} ** NUM_THREADS
     else if (std.mem.eql(u8, alloc_name, "huge_2mb_alloc"))
         huge_2mb_alloc_allocs
     else if (std.mem.eql(u8, alloc_name, "huge_1gb_alloc"))
@@ -90,7 +90,7 @@ pub fn main() !void {
 
 const Bench = struct {
     name: []const u8,
-    allocs: [num_threads]Allocator,
+    allocs: [NUM_THREADS]Allocator,
     num_runs: usize,
     buf_size: usize,
     num_bufs: usize,
@@ -123,10 +123,10 @@ fn runBench(bench: *const Bench) !void {
 }
 
 fn doOneRun(bench: *const Bench) !u64 {
-    var results: [num_threads]anyerror!u64 = .{0} ** num_threads;
-    var threads: [num_threads]std.Thread = undefined;
+    var results: [NUM_THREADS]anyerror!u64 = .{0} ** NUM_THREADS;
+    var threads: [NUM_THREADS]std.Thread = undefined;
 
-    for (0..num_threads) |i| {
+    for (0..NUM_THREADS) |i| {
         const thread = try std.Thread.spawn(.{}, doOneRunWrap, .{ i, Ctx{ .bench = bench, .out = &results[i] } });
         threads[i] = thread;
     }
@@ -149,11 +149,13 @@ const Ctx = struct {
 };
 
 fn doOneRunWrap(thread_id: usize, ctx: Ctx) void {
-    const out = doOneRunThread(thread_id, ctx.bench) catch |e| {
-        ctx.out.* = e;
-        return;
-    };
-    ctx.out.* = out;
+    for (0..16) |_| {
+        const out = doOneRunThread(thread_id, ctx.bench) catch |e| {
+            ctx.out.* = e;
+            return;
+        };
+        ctx.out.* = out;
+    }
 }
 
 fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {

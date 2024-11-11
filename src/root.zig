@@ -7,6 +7,8 @@ const linux = std.os.linux;
 const ONE_GB = 1 * 1024 * 1024 * 1024;
 const TWO_MB = 2 * 1024 * 1024;
 
+const MIN_ALLOC_SIZE = 4 * TWO_MB;
+
 pub const PageAllocVTable = struct {
     alloc_page: *const fn (size: usize) ?[]align(std.mem.page_size) u8,
     free_page: *const fn (page: []align(std.mem.page_size) u8) void,
@@ -22,7 +24,7 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, TWO_MB * 4);
+    const alloc_size = @max(aligned_size, MIN_ALLOC_SIZE);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
     const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
     const thp_section = page[ptr_alignment_offset..];
@@ -81,7 +83,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, 4 * TWO_MB);
+    const alloc_size = @max(aligned_size, MIN_ALLOC_SIZE);
     const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
