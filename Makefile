@@ -6,6 +6,6 @@ install_bench:
 	zig build install -Doptimize=ReleaseFast
 run_bench: install_bench
 	for alloc in $(ALLOCATORS); do \
-		/usr/bin/time -v ./zig-out/bin/bench $$alloc 100000 10123123123 1; \
+		/usr/bin/time -v ./zig-out/bin/bench $$alloc 400000 8123123123 1; \
 	done
 

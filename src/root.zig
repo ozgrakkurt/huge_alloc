@@ -183,6 +183,7 @@ pub const HugePageAlloc = struct {
     fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
+
         if (size == 0) {
             return null;
         }
@@ -350,7 +351,6 @@ fn align_up(v: usize, align_v: usize) usize {
 pub const BumpConfig = struct {
     child_allocator: Allocator,
     budget: usize = std.math.maxInt(usize),
-    alloc_size_align_log2: u8 = 16,
 };
 
 pub const BumpAlloc = struct {
@@ -358,7 +358,6 @@ pub const BumpAlloc = struct {
     allocs: ArrayList([]u8),
     budget: usize,
     buf: []u8,
-    alloc_size_align_log2: u8,
 
     pub fn init(cfg: BumpConfig) BumpAlloc {
         return .{
@@ -366,7 +365,6 @@ pub const BumpAlloc = struct {
             .allocs = ArrayList([]u8).init(cfg.child_allocator),
             .budget = cfg.budget,
             .buf = &.{},
-            .alloc_size_align_log2 = cfg.alloc_size_align_log2,
         };
     }
 
@@ -395,14 +393,13 @@ pub const BumpAlloc = struct {
             self.buf = self.buf[alignment_offset + size ..];
             return page.ptr;
         } else {
-            const alloc_size_align = usize_from_log2(self.alloc_size_align_log2);
-            const alloc_size = align_up(size, alloc_size_align);
+            const alloc_size = @max(MIN_ALLOC_SIZE / 8, size);
 
             if (alloc_size > self.budget) {
                 return null;
             }
 
-            const new_buf = self.child_allocator.alignedAlloc(u8, std.mem.page_size, alloc_size) catch return null;
+            const new_buf = self.child_allocator.alloc(u8, alloc_size) catch return null;
             self.buf = new_buf[size..];
 
             self.allocs.append(new_buf) catch {

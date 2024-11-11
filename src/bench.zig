@@ -98,6 +98,10 @@ pub fn main() !void {
     };
 }
 
+//fn next_power_of_two(comptime T: type, val: T) T {
+//    return std.math.shl(T, 1, (@typeInfo(T).int.bits - @clz(val -% @as(T, 1))));
+//}
+
 const Bench = struct {
     name: []const u8,
     allocs: [NUM_THREADS]Allocator,
@@ -178,7 +182,6 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
     defer arena.deinit();
     var bump = huge_alloc.BumpAlloc.init(.{
         .child_allocator = base_allocator,
-        .alloc_size_align_log2 = 22,
     });
     defer bump.deinit();
     const alloc = if (bench.use_arena) arena.allocator() else bump.allocator();
@@ -202,20 +205,20 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
     }
 
     var compressed = try alloc.alloc([]u8, bench.num_bufs);
-    var compressed_len = try alloc.alloc(usize, bench.num_bufs);
+
+    var scratch = try alloc.alloc(u8, zstd.ZSTD_compressBound(bench.buf_size * 8));
 
     for (0..bench.num_bufs) |i| {
-        const needed_size = zstd.ZSTD_compressBound(bench.buf_size * 8);
-
-        const buf = try alloc.alloc(u8, needed_size);
-        compressed[i] = buf;
-
-        const c_len = zstd.ZSTD_compress(buf.ptr, buf.len, original[i].ptr, original[i].len * 8, 8);
+        const c_len = zstd.ZSTD_compress(scratch.ptr, scratch.len, original[i].ptr, original[i].len * 8, 8);
         if (zstd.ZSTD_isError(c_len) != 0) {
             @panic("failed to compress");
         }
 
-        compressed_len[i] = c_len;
+        const buf = try alloc.alloc(u8, c_len);
+
+        @memcpy(buf, scratch[0..c_len]);
+
+        compressed[i] = buf;
     }
 
     var decompressed = try alloc.alloc([]u64, bench.num_bufs);
@@ -225,7 +228,8 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
 
         decompressed[i] = buf;
 
-        const res = zstd.ZSTD_decompress(buf.ptr, buf.len * 8, compressed[i].ptr, compressed_len[i]);
+        const src_buf = compressed[i];
+        const res = zstd.ZSTD_decompress(buf.ptr, buf.len * 8, src_buf.ptr, src_buf.len);
         if (0 != zstd.ZSTD_isError(res)) {
             @panic("failed to decompress");
         }

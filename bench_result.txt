@@ -1,74 +1,24 @@
 zig build install -Doptimize=ReleaseFast
 for alloc in huge_alloc page_alloc general_purpose_alloc huge_2mb_alloc huge_1gb_alloc; do \
-	/usr/bin/time -v ./zig-out/bin/bench $alloc 60480 512312312 1; \
+	/usr/bin/time -v ./zig-out/bin/bench $alloc 100000 10123123123 1; \
 done
-Running huge_alloc with buf_size = 60480
-Best-Median-Worst running times in microseconds were 4672053-4672053-4672053
-	Command being timed: "./zig-out/bin/bench huge_alloc 60480 512312312 1"
-	User time (seconds): 30.78
-	System time (seconds): 0.53
-	Percent of CPU this job got: 668%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:04.68
+Running huge_alloc with buf_size = 100000
+Best-Median-Worst running times in microseconds were 18222502-18222502-18222502
+	Command being timed: "./zig-out/bin/bench huge_alloc 100000 10123123123 1"
+	User time (seconds): 157.58
+	System time (seconds): 1.39
+	Percent of CPU this job got: 871%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:18.24
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 4271920
+	Maximum resident set size (kbytes): 10542120
 	Average resident set size (kbytes): 0
 	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 9915
-	Voluntary context switches: 185
-	Involuntary context switches: 271
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
-Running page_alloc with buf_size = 60480
-Best-Median-Worst running times in microseconds were 6527193-6527193-6527193
-	Command being timed: "./zig-out/bin/bench page_alloc 60480 512312312 1"
-	User time (seconds): 38.04
-	System time (seconds): 8.56
-	Percent of CPU this job got: 713%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.52
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 3286024
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 296983
-	Voluntary context switches: 946
-	Involuntary context switches: 193
-	Swaps: 0
-	File system inputs: 0
-	File system outputs: 0
-	Socket messages sent: 0
-	Socket messages received: 0
-	Signals delivered: 0
-	Page size (bytes): 4096
-	Exit status: 0
-Running general_purpose_alloc with buf_size = 60480
-Best-Median-Worst running times in microseconds were 6431233-6431233-6431233
-	Command being timed: "./zig-out/bin/bench general_purpose_alloc 60480 512312312 1"
-	User time (seconds): 36.88
-	System time (seconds): 8.73
-	Percent of CPU this job got: 709%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:06.43
-	Average shared text size (kbytes): 0
-	Average unshared data size (kbytes): 0
-	Average stack size (kbytes): 0
-	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 3259592
-	Average resident set size (kbytes): 0
-	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 298700
-	Voluntary context switches: 820
-	Involuntary context switches: 440
+	Minor (reclaiming a frame) page faults: 14380
+	Voluntary context switches: 830
+	Involuntary context switches: 707
 	Swaps: 0
 	File system inputs: 0
 	File system outputs: 8
@@ -77,21 +27,71 @@ Best-Median-Worst running times in microseconds were 6431233-6431233-6431233
 	Signals delivered: 0
 	Page size (bytes): 4096
 	Exit status: 0
-Running huge_2mb_alloc with buf_size = 60480
-Best-Median-Worst running times in microseconds were 223-223-223
-	Command being timed: "./zig-out/bin/bench huge_2mb_alloc 60480 512312312 1"
+Running page_alloc with buf_size = 100000
+Best-Median-Worst running times in microseconds were 28547565-28547565-28547565
+	Command being timed: "./zig-out/bin/bench page_alloc 100000 10123123123 1"
+	User time (seconds): 230.46
+	System time (seconds): 37.49
+	Percent of CPU this job got: 938%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:28.55
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 9288376
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 648390
+	Voluntary context switches: 1265
+	Involuntary context switches: 2383
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+Running general_purpose_alloc with buf_size = 100000
+Best-Median-Worst running times in microseconds were 28298390-28298390-28298390
+	Command being timed: "./zig-out/bin/bench general_purpose_alloc 100000 10123123123 1"
+	User time (seconds): 228.15
+	System time (seconds): 38.85
+	Percent of CPU this job got: 943%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:28.30
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 9157752
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 650631
+	Voluntary context switches: 1606
+	Involuntary context switches: 2895
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
+Running huge_2mb_alloc with buf_size = 100000
+Failed to run huge_2mb_alloc with buf_size = 100000
+	Command being timed: "./zig-out/bin/bench huge_2mb_alloc 100000 10123123123 1"
 	User time (seconds): 0.00
 	System time (seconds): 0.00
-	Percent of CPU this job got: 137%
+	Percent of CPU this job got: 135%
 	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.00
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 1952
+	Maximum resident set size (kbytes): 1828
 	Average resident set size (kbytes): 0
 	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 99
+	Minor (reclaiming a frame) page faults: 103
 	Voluntary context switches: 13
 	Involuntary context switches: 0
 	Swaps: 0
@@ -102,26 +102,26 @@ Best-Median-Worst running times in microseconds were 223-223-223
 	Signals delivered: 0
 	Page size (bytes): 4096
 	Exit status: 0
-Running huge_1gb_alloc with buf_size = 60480
-Best-Median-Worst running times in microseconds were 4814034-4814034-4814034
-	Command being timed: "./zig-out/bin/bench huge_1gb_alloc 60480 512312312 1"
-	User time (seconds): 31.20
-	System time (seconds): 0.71
-	Percent of CPU this job got: 634%
-	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:05.03
+Running huge_1gb_alloc with buf_size = 100000
+Best-Median-Worst running times in microseconds were 18957602-18957602-18957602
+	Command being timed: "./zig-out/bin/bench huge_1gb_alloc 100000 10123123123 1"
+	User time (seconds): 164.83
+	System time (seconds): 0.44
+	Percent of CPU this job got: 864%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:19.12
 	Average shared text size (kbytes): 0
 	Average unshared data size (kbytes): 0
 	Average stack size (kbytes): 0
 	Average total size (kbytes): 0
-	Maximum resident set size (kbytes): 44268
+	Maximum resident set size (kbytes): 55132
 	Average resident set size (kbytes): 0
 	Major (requiring I/O) page faults: 0
-	Minor (reclaiming a frame) page faults: 7215
-	Voluntary context switches: 40
-	Involuntary context switches: 161
+	Minor (reclaiming a frame) page faults: 8862
+	Voluntary context switches: 51
+	Involuntary context switches: 2012
 	Swaps: 0
 	File system inputs: 0
-	File system outputs: 0
+	File system outputs: 8
 	Socket messages sent: 0
 	Socket messages received: 0
 	Signals delivered: 0
