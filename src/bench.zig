@@ -7,10 +7,44 @@ const Timer = std.time.Timer;
 const sort = std.sort;
 const doNotOptimizeAway = std.mem.doNotOptimizeAway;
 
-pub fn main() void {
-    var huge_allocator = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
-    defer huge_allocator.deinit();
-    const huge_alloc_alloc = huge_allocator.make_allocator();
+const num_threads = 12;
+
+pub fn main() !void {
+    var huge_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
+    var huge_alloc_allocs: [num_threads]Allocator = undefined;
+
+    for (0..num_threads) |i| {
+        huge_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
+        huge_alloc_allocs[i] = huge_allocators[i].make_allocator();
+    }
+
+    defer for (&huge_allocators) |*a| {
+        a.deinit();
+    };
+
+    var huge_2mb_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
+    var huge_2mb_alloc_allocs: [num_threads]Allocator = undefined;
+
+    for (0..num_threads) |i| {
+        huge_2mb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
+        huge_2mb_alloc_allocs[i] = huge_2mb_allocators[i].make_allocator();
+    }
+
+    defer for (&huge_2mb_allocators) |*a| {
+        a.deinit();
+    };
+
+    var huge_1gb_allocators: [num_threads]huge_alloc.HugePageAlloc = undefined;
+    var huge_1gb_alloc_allocs: [num_threads]Allocator = undefined;
+
+    for (0..num_threads) |i| {
+        huge_1gb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
+        huge_1gb_alloc_allocs[i] = huge_1gb_allocators[i].make_allocator();
+    }
+
+    defer for (&huge_1gb_allocators) |*a| {
+        a.deinit();
+    };
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const gpa_alloc = gpa.allocator();
@@ -19,39 +53,44 @@ pub fn main() void {
         if (deinit_status == .leak) @panic("TEST FAIL");
     }
 
-    var huge_allocator_2mb = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
-    defer huge_allocator_2mb.deinit();
-    const huge_2mb_alloc = huge_allocator_2mb.make_allocator();
+    var args = std.process.args();
+    _ = args.next() orelse unreachable;
 
-    var huge_allocator_1gb = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
-    defer huge_allocator_1gb.deinit();
-    const huge_1gb_alloc = huge_allocator_1gb.make_allocator();
+    const alloc_name = args.next() orelse @panic("alloc_name argument not found");
+    const buf_size_str = args.next() orelse @panic("buf_size argument not found");
+    const buf_size = try std.fmt.parseInt(usize, buf_size_str, 10);
+    const mem_use_str = args.next() orelse @panic("mem_size argument not found");
+    const mem_use = try std.fmt.parseInt(usize, mem_use_str, 10);
+    const num_runs_str = args.next() orelse @panic("num_runs argument not found");
+    const num_runs = try std.fmt.parseInt(usize, num_runs_str, 10);
 
-    const names = [_][]const u8{ "huge_alloc", "page_alloc", "general_purpose_alloc", "huge_2mb_alloc", "huge_1gb_alloc" };
-    const allocators = [_]Allocator{ huge_alloc_alloc, std.heap.page_allocator, gpa_alloc, huge_2mb_alloc, huge_1gb_alloc };
+    const allocs = if (std.mem.eql(u8, alloc_name, "huge_alloc"))
+        huge_alloc_allocs
+    else if (std.mem.eql(u8, alloc_name, "page_alloc"))
+        .{std.heap.page_allocator} ** num_threads
+    else if (std.mem.eql(u8, alloc_name, "general_purpose_alloc"))
+        .{gpa_alloc} ** num_threads
+    else if (std.mem.eql(u8, alloc_name, "huge_2mb_alloc"))
+        huge_2mb_alloc_allocs
+    else if (std.mem.eql(u8, alloc_name, "huge_1gb_alloc"))
+        huge_1gb_alloc_allocs
+    else
+        @panic("unknown alloc name");
 
-    const num_runs = 50;
-    const buf_sizes = [_]usize{ 128, 128 * 1024, 1024 * 1024, 4 * 1024 * 1024, 10 * 1024 * 1024, 12 * 1024 * 1024 };
-    const mem_use = 2 * 1024 * 1024;
-
-    for (buf_sizes) |buf_size| {
-        for (names, allocators) |name, alloc| {
-            runBench(&Bench{
-                .name = name,
-                .alloc = alloc,
-                .num_runs = num_runs,
-                .buf_size = buf_size,
-                .num_bufs = mem_use / buf_size,
-            }) catch {
-                std.debug.print("Failed to run {s} with buf_size = {d}\n", .{ name, buf_size });
-            };
-        }
-    }
+    runBench(&Bench{
+        .name = alloc_name,
+        .allocs = allocs,
+        .num_runs = num_runs,
+        .buf_size = buf_size,
+        .num_bufs = mem_use / buf_size / 8 / 3,
+    }) catch {
+        std.debug.print("Failed to run {s} with buf_size = {d}\n", .{ alloc_name, buf_size });
+    };
 }
 
 const Bench = struct {
     name: []const u8,
-    alloc: Allocator,
+    allocs: [num_threads]Allocator,
     num_runs: usize,
     buf_size: usize,
     num_bufs: usize,
@@ -65,7 +104,7 @@ fn runBench(bench: *const Bench) !void {
 
     std.debug.print("Running {s} with buf_size = {d}\n", .{ bench.name, bench.buf_size });
 
-    var timings = ArrayList(u64).init(bench.alloc);
+    var timings = ArrayList(u64).init(std.heap.page_allocator);
     defer timings.deinit();
 
     var timer = try Timer.start();
@@ -76,12 +115,53 @@ fn runBench(bench: *const Bench) !void {
 
     sort.pdq(u64, timings.items, {}, sort.asc(u64));
 
-    std.debug.print("Median running time was {d}μs\n", .{timings.items[timings.items.len / 2] / 1000});
+    const best = timings.items[0] / 1000;
+    const median = timings.items[timings.items.len / 2] / 1000;
+    const worst = timings.items[timings.items.len - 1] / 1000;
+
+    std.debug.print("Best-Median-Worst running times in microseconds were {d}-{d}-{d}\n", .{ best, median, worst });
 }
 
 fn doOneRun(bench: *const Bench) !u64 {
-    var original = try bench.alloc.alloc([]u64, bench.num_bufs);
-    defer bench.alloc.free(original);
+    var results: [num_threads]anyerror!u64 = .{0} ** num_threads;
+    var threads: [num_threads]std.Thread = undefined;
+
+    for (0..num_threads) |i| {
+        const thread = try std.Thread.spawn(.{}, doOneRunWrap, .{ i, Ctx{ .bench = bench, .out = &results[i] } });
+        threads[i] = thread;
+    }
+
+    for (threads) |t| {
+        t.join();
+    }
+
+    var acc: u64 = 0;
+    for (results) |r| {
+        acc +%= try r;
+    }
+
+    return acc;
+}
+
+const Ctx = struct {
+    bench: *const Bench,
+    out: *anyerror!u64,
+};
+
+fn doOneRunWrap(thread_id: usize, ctx: Ctx) void {
+    const out = doOneRunThread(thread_id, ctx.bench) catch |e| {
+        ctx.out.* = e;
+        return;
+    };
+    ctx.out.* = out;
+}
+
+fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
+    var arena = std.heap.ArenaAllocator.init(bench.allocs[thread_id]);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var original = try alloc.alloc([]u64, bench.num_bufs);
 
     var rng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
@@ -91,7 +171,7 @@ fn doOneRun(bench: *const Bench) !u64 {
     const rand = rng.random();
 
     for (0..bench.num_bufs) |i| {
-        const buf = try bench.alloc.alloc(u64, bench.buf_size);
+        const buf = try alloc.alloc(u64, bench.buf_size);
         original[i] = buf;
 
         for (0..buf.len) |j| {
@@ -99,19 +179,13 @@ fn doOneRun(bench: *const Bench) !u64 {
         }
     }
 
-    defer for (original) |buf| {
-        bench.alloc.free(buf);
-    };
-
-    var compressed = try bench.alloc.alloc([]u8, bench.num_bufs);
-    var compressed_len = try bench.alloc.alloc(usize, bench.num_bufs);
-    defer bench.alloc.free(compressed);
-    defer bench.alloc.free(compressed_len);
+    var compressed = try alloc.alloc([]u8, bench.num_bufs);
+    var compressed_len = try alloc.alloc(usize, bench.num_bufs);
 
     for (0..bench.num_bufs) |i| {
         const needed_size = zstd.ZSTD_compressBound(bench.buf_size * 8);
 
-        const buf = try bench.alloc.alloc(u8, needed_size);
+        const buf = try alloc.alloc(u8, needed_size);
         compressed[i] = buf;
 
         const c_len = zstd.ZSTD_compress(buf.ptr, buf.len, original[i].ptr, original[i].len * 8, 8);
@@ -122,15 +196,10 @@ fn doOneRun(bench: *const Bench) !u64 {
         compressed_len[i] = c_len;
     }
 
-    defer for (compressed) |buf| {
-        bench.alloc.free(buf);
-    };
-
-    var decompressed = try bench.alloc.alloc([]u64, bench.num_bufs);
-    defer bench.alloc.free(decompressed);
+    var decompressed = try alloc.alloc([]u64, bench.num_bufs);
 
     for (0..bench.num_bufs) |i| {
-        const buf = try bench.alloc.alloc(u64, bench.buf_size);
+        const buf = try alloc.alloc(u64, bench.buf_size);
 
         decompressed[i] = buf;
 
@@ -140,21 +209,20 @@ fn doOneRun(bench: *const Bench) !u64 {
         }
     }
 
-    defer for (decompressed) |buf| {
-        bench.alloc.free(buf);
-    };
-
-    var accum = try bench.alloc.alloc(u64, bench.buf_size);
-    defer bench.alloc.free(accum);
+    var accum = try alloc.alloc(u64, bench.buf_size);
 
     for (accum) |*x| {
         x.* = 0;
     }
 
-    for (decompressed) |buf| {
-        for (0..bench.buf_size) |i| {
-            accum[i] +%= buf[i];
+    for (0..bench.buf_size) |i| {
+        for (decompressed) |buf| {
+            accum[accum.len - i - 1] +%= buf[buf.len - i - 1];
         }
+    }
+
+    for (decompressed) |buf| {
+        alloc.free(buf);
     }
 
     var acc = @as(u64, 0);

@@ -22,7 +22,7 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, TWO_MB * 16);
+    const alloc_size = @max(aligned_size, TWO_MB * 4);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
     const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
     const thp_section = page[ptr_alignment_offset..];
@@ -81,7 +81,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
         return null;
     }
     const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, 16 * TWO_MB);
+    const alloc_size = @max(aligned_size, 4 * TWO_MB);
     const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
@@ -90,11 +90,11 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
     if (size == 0) {
         return null;
     }
-    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = huge_page_flag != 0, .POPULATE = true };
+    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = huge_page_flag != 0, .POPULATE = true, .LOCKED = true };
     const flags_int: u32 = @bitCast(flags);
     const flags_f: linux.MAP = @bitCast(flags_int | huge_page_flag);
     const page = posix.mmap(null, size, posix.PROT.READ | posix.PROT.WRITE, flags_f, -1, 0) catch return null;
-    return @alignCast(page);
+    return page;
 }
 
 pub const Config = struct {
@@ -107,6 +107,7 @@ pub const HugePageAlloc = struct {
     page_alloc: PageAllocVTable,
     base_alloc: Allocator,
     free_after: usize,
+    total_size: usize,
 
     pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
         return HugePageAlloc.init_with_config(base_alloc, v_table, &.{});
@@ -119,6 +120,7 @@ pub const HugePageAlloc = struct {
             .page_alloc = v_table,
             .base_alloc = base_alloc,
             .free_after = cfg.free_after,
+            .total_size = 0,
         };
     }
 
@@ -194,6 +196,7 @@ pub const HugePageAlloc = struct {
         }
 
         const page = self.page_alloc.alloc_page(size) orelse return null;
+        self.total_size += page.len;
         const ptr = self.alloc_on_new_page(page, size) catch {
             self.page_alloc.free_page(page);
             return null;
@@ -289,17 +292,28 @@ pub const HugePageAlloc = struct {
                 }
             }
             if (found) {
-                const page = self.pages.items[page_idx];
-                if (range_to_insert.ptr == page.ptr and range_to_insert.len == page.len and self.should_free()) {
-                    self.page_alloc.free_page(page);
-                    _ = self.pages.swapRemove(page_idx);
-                    const free_l = self.free_list.swapRemove(page_idx);
-                    free_l.deinit();
-                } else {
-                    free_ranges.append(range_to_insert) catch unreachable;
-                }
+                free_ranges.append(range_to_insert) catch unreachable;
             } else {
                 free_ranges.append(buf) catch @panic("unrecoverable failure");
+            }
+            if (self.should_free()) {
+                var page_index: usize = 0;
+                while (page_index < self.pages.items.len) {
+                    const free_r = self.free_list.items[page_index];
+                    if (free_r.items.len == 1) {
+                        const range = free_ranges.items[0];
+                        const page = self.pages.items[page_index];
+                        if (range.ptr == page.ptr and range.len == page.len) {
+                            self.page_alloc.free_page(page);
+                            self.total_size -= page.len;
+                            _ = self.pages.swapRemove(page_index);
+                            const free_l = self.free_list.swapRemove(page_index);
+                            free_l.deinit();
+                            continue;
+                        }
+                    }
+                    page_index += 1;
+                }
             }
             return;
         }
@@ -308,13 +322,7 @@ pub const HugePageAlloc = struct {
     }
 
     fn should_free(self: *HugePageAlloc) bool {
-        var total_alloc_size = @as(usize, 0);
-
-        for (self.pages.items) |page| {
-            total_alloc_size +|= page.len;
-        }
-
-        return total_alloc_size >= self.free_after;
+        return self.total_size >= self.free_after;
     }
 
     pub fn make_allocator(self: *HugePageAlloc) Allocator {
