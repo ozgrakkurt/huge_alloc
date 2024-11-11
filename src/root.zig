@@ -324,7 +324,7 @@ pub const HugePageAlloc = struct {
     }
 
     fn should_free(self: *HugePageAlloc) bool {
-        return self.total_size >= self.free_after;
+        return self.total_size > self.free_after;
     }
 
     pub fn make_allocator(self: *HugePageAlloc) Allocator {

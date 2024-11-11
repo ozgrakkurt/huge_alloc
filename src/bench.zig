@@ -7,7 +7,7 @@ const Timer = std.time.Timer;
 const sort = std.sort;
 const doNotOptimizeAway = std.mem.doNotOptimizeAway;
 
-const NUM_THREADS = 8;
+const NUM_THREADS = 10;
 
 pub fn main() !void {
     var huge_allocators: [NUM_THREADS]huge_alloc.HugePageAlloc = undefined;
@@ -82,7 +82,7 @@ pub fn main() !void {
         .allocs = allocs,
         .num_runs = num_runs,
         .buf_size = buf_size,
-        .num_bufs = mem_use / buf_size / 8 / 3,
+        .num_bufs = mem_use / buf_size / 8 / 3 / NUM_THREADS,
     }) catch {
         std.debug.print("Failed to run {s} with buf_size = {d}\n", .{ alloc_name, buf_size });
     };
@@ -149,7 +149,7 @@ const Ctx = struct {
 };
 
 fn doOneRunWrap(thread_id: usize, ctx: Ctx) void {
-    for (0..16) |_| {
+    for (0..24) |_| {
         const out = doOneRunThread(thread_id, ctx.bench) catch |e| {
             ctx.out.* = e;
             return;
@@ -159,11 +159,12 @@ fn doOneRunWrap(thread_id: usize, ctx: Ctx) void {
 }
 
 fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
-    var arena = std.heap.ArenaAllocator.init(bench.allocs[thread_id]);
-    defer arena.deinit();
-    const alloc = arena.allocator();
+    //var arena = std.heap.ArenaAllocator.init(bench.allocs[thread_id]);
+    //defer arena.deinit();
+    const alloc = bench.allocs[thread_id];
 
     var original = try alloc.alloc([]u64, bench.num_bufs);
+    defer alloc.free(original);
 
     var rng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
@@ -181,8 +182,14 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         }
     }
 
+    defer for (original) |b| {
+        alloc.free(b);
+    };
+
     var compressed = try alloc.alloc([]u8, bench.num_bufs);
+    defer alloc.free(compressed);
     var compressed_len = try alloc.alloc(usize, bench.num_bufs);
+    defer alloc.free(compressed_len);
 
     for (0..bench.num_bufs) |i| {
         const needed_size = zstd.ZSTD_compressBound(bench.buf_size * 8);
@@ -198,7 +205,12 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         compressed_len[i] = c_len;
     }
 
+    defer for (compressed) |b| {
+        alloc.free(b);
+    };
+
     var decompressed = try alloc.alloc([]u64, bench.num_bufs);
+    defer alloc.free(decompressed);
 
     for (0..bench.num_bufs) |i| {
         const buf = try alloc.alloc(u64, bench.buf_size);
@@ -211,7 +223,12 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         }
     }
 
+    defer for (decompressed) |b| {
+        alloc.free(b);
+    };
+
     var accum = try alloc.alloc(u64, bench.buf_size);
+    defer alloc.free(accum);
 
     for (accum) |*x| {
         x.* = 0;
@@ -221,10 +238,6 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         for (decompressed) |buf| {
             accum[accum.len - i - 1] +%= buf[buf.len - i - 1];
         }
-    }
-
-    for (decompressed) |buf| {
-        alloc.free(buf);
     }
 
     var acc = @as(u64, 0);
