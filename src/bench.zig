@@ -64,18 +64,27 @@ pub fn main() !void {
     const num_runs_str = args.next() orelse @panic("num_runs argument not found");
     const num_runs = try std.fmt.parseInt(usize, num_runs_str, 10);
 
-    const allocs = if (std.mem.eql(u8, alloc_name, "huge_alloc"))
-        huge_alloc_allocs
-    else if (std.mem.eql(u8, alloc_name, "page_alloc"))
-        .{std.heap.page_allocator} ** NUM_THREADS
-    else if (std.mem.eql(u8, alloc_name, "general_purpose_alloc"))
-        .{gpa_alloc} ** NUM_THREADS
-    else if (std.mem.eql(u8, alloc_name, "huge_2mb_alloc"))
-        huge_2mb_alloc_allocs
-    else if (std.mem.eql(u8, alloc_name, "huge_1gb_alloc"))
-        huge_1gb_alloc_allocs
-    else
+    var use_arena: bool = undefined;
+    var allocs: [NUM_THREADS]Allocator = undefined;
+
+    if (std.mem.eql(u8, alloc_name, "huge_alloc")) {
+        allocs = huge_alloc_allocs;
+        use_arena = false;
+    } else if (std.mem.eql(u8, alloc_name, "page_alloc")) {
+        allocs = .{std.heap.page_allocator} ** NUM_THREADS;
+        use_arena = true;
+    } else if (std.mem.eql(u8, alloc_name, "general_purpose_alloc")) {
+        allocs = .{gpa_alloc} ** NUM_THREADS;
+        use_arena = true;
+    } else if (std.mem.eql(u8, alloc_name, "huge_2mb_alloc")) {
+        allocs = huge_2mb_alloc_allocs;
+        use_arena = false;
+    } else if (std.mem.eql(u8, alloc_name, "huge_1gb_alloc")) {
+        allocs = huge_1gb_alloc_allocs;
+        use_arena = false;
+    } else {
         @panic("unknown alloc name");
+    }
 
     runBench(&Bench{
         .name = alloc_name,
@@ -83,6 +92,7 @@ pub fn main() !void {
         .num_runs = num_runs,
         .buf_size = buf_size,
         .num_bufs = mem_use / buf_size / 8 / 3 / NUM_THREADS,
+        .use_arena = use_arena,
     }) catch {
         std.debug.print("Failed to run {s} with buf_size = {d}\n", .{ alloc_name, buf_size });
     };
@@ -94,6 +104,7 @@ const Bench = struct {
     num_runs: usize,
     buf_size: usize,
     num_bufs: usize,
+    use_arena: bool,
 };
 
 fn runBench(bench: *const Bench) !void {
@@ -109,7 +120,7 @@ fn runBench(bench: *const Bench) !void {
 
     var timer = try Timer.start();
     for (0..bench.num_runs) |_| {
-        doNotOptimizeAway(doOneRun(bench));
+        doNotOptimizeAway(try doOneRun(bench));
         try timings.append(timer.lap());
     }
 
@@ -159,9 +170,13 @@ fn doOneRunWrap(thread_id: usize, ctx: Ctx) void {
 }
 
 fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
-    //var arena = std.heap.ArenaAllocator.init(bench.allocs[thread_id]);
-    //defer arena.deinit();
-    const alloc = bench.allocs[thread_id];
+    const base_allocator = bench.allocs[thread_id];
+    var arena = std.heap.ArenaAllocator{
+        .child_allocator = base_allocator,
+        .state = .{},
+    };
+    defer arena.deinit();
+    const alloc = if (bench.use_arena) arena.allocator() else base_allocator;
 
     var original = try alloc.alloc([]u64, bench.num_bufs);
     defer alloc.free(original);

@@ -7,7 +7,7 @@ const linux = std.os.linux;
 const ONE_GB = 1 * 1024 * 1024 * 1024;
 const TWO_MB = 2 * 1024 * 1024;
 
-const MIN_ALLOC_SIZE = 4 * TWO_MB;
+const MIN_ALLOC_SIZE = 16 * TWO_MB;
 
 pub const PageAllocVTable = struct {
     alloc_page: *const fn (size: usize) ?[]align(std.mem.page_size) u8,
