@@ -14,7 +14,7 @@ pub fn main() !void {
     var huge_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
     for (0..NUM_THREADS) |i| {
-        huge_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
+        huge_allocators[i] = huge_alloc.HugePageAlloc.init(.{});
         huge_alloc_allocs[i] = huge_allocators[i].allocator();
     }
 
@@ -26,7 +26,7 @@ pub fn main() !void {
     var huge_2mb_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
     for (0..NUM_THREADS) |i| {
-        huge_2mb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
+        huge_2mb_allocators[i] = huge_alloc.HugePageAlloc.init(.{ .page_alloc_vtable = huge_alloc.huge_page_2mb_alloc_vtable });
         huge_2mb_alloc_allocs[i] = huge_2mb_allocators[i].allocator();
     }
 
@@ -38,7 +38,7 @@ pub fn main() !void {
     var huge_1gb_alloc_allocs: [NUM_THREADS]Allocator = undefined;
 
     for (0..NUM_THREADS) |i| {
-        huge_1gb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
+        huge_1gb_allocators[i] = huge_alloc.HugePageAlloc.init(.{ .page_alloc_vtable = huge_alloc.huge_page_1gb_alloc_vtable });
         huge_1gb_alloc_allocs[i] = huge_1gb_allocators[i].allocator();
     }
 
@@ -178,7 +178,7 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
     defer arena.deinit();
     var bump = huge_alloc.BumpAlloc.init(.{
         .child_allocator = base_allocator,
-        .alloc_size_align_log2 = 20,
+        .alloc_size_align_log2 = 22,
     });
     defer bump.deinit();
     const alloc = if (bench.use_arena) arena.allocator() else bump.allocator();

@@ -101,6 +101,8 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
 
 pub const Config = struct {
     free_after: usize = std.math.maxInt(usize),
+    base_alloc: Allocator = std.heap.page_allocator,
+    page_alloc_vtable: PageAllocVTable = thp_alloc_vtable,
 };
 
 pub const HugePageAlloc = struct {
@@ -111,16 +113,12 @@ pub const HugePageAlloc = struct {
     free_after: usize,
     total_size: usize,
 
-    pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
-        return HugePageAlloc.init_with_config(base_alloc, v_table, &.{});
-    }
-
-    pub fn init_with_config(base_alloc: Allocator, v_table: PageAllocVTable, cfg: *const Config) HugePageAlloc {
+    pub fn init(cfg: Config) HugePageAlloc {
         return HugePageAlloc{
-            .pages = ArrayList([]align(std.mem.page_size) u8).init(base_alloc),
-            .free_list = ArrayList(ArrayList([]u8)).init(base_alloc),
-            .page_alloc = v_table,
-            .base_alloc = base_alloc,
+            .pages = ArrayList([]align(std.mem.page_size) u8).init(cfg.base_alloc),
+            .free_list = ArrayList(ArrayList([]u8)).init(cfg.base_alloc),
+            .page_alloc = cfg.page_alloc_vtable,
+            .base_alloc = cfg.base_alloc,
             .free_after = cfg.free_after,
             .total_size = 0,
         };
@@ -479,7 +477,7 @@ test "alloc_test_page" {
 }
 
 test "huge_page_alloc" {
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
 
     const ptr = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
@@ -532,7 +530,7 @@ test "align_offset" {
 }
 
 test "test allocator with std" {
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
     const alloc = huge_alloc.allocator();
 
@@ -556,7 +554,7 @@ fn to_fuzz(input: []const u8) anyerror!void {
         return;
     }
 
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
     const alloc = huge_alloc.allocator();
 
