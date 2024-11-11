@@ -15,7 +15,7 @@ pub fn main() !void {
 
     for (0..NUM_THREADS) |i| {
         huge_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.thp_alloc_vtable);
-        huge_alloc_allocs[i] = huge_allocators[i].make_allocator();
+        huge_alloc_allocs[i] = huge_allocators[i].allocator();
     }
 
     defer for (&huge_allocators) |*a| {
@@ -27,7 +27,7 @@ pub fn main() !void {
 
     for (0..NUM_THREADS) |i| {
         huge_2mb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_2mb_alloc_vtable);
-        huge_2mb_alloc_allocs[i] = huge_2mb_allocators[i].make_allocator();
+        huge_2mb_alloc_allocs[i] = huge_2mb_allocators[i].allocator();
     }
 
     defer for (&huge_2mb_allocators) |*a| {
@@ -39,7 +39,7 @@ pub fn main() !void {
 
     for (0..NUM_THREADS) |i| {
         huge_1gb_allocators[i] = huge_alloc.HugePageAlloc.init(std.heap.page_allocator, huge_alloc.huge_page_1gb_alloc_vtable);
-        huge_1gb_alloc_allocs[i] = huge_1gb_allocators[i].make_allocator();
+        huge_1gb_alloc_allocs[i] = huge_1gb_allocators[i].allocator();
     }
 
     defer for (&huge_1gb_allocators) |*a| {
@@ -176,10 +176,14 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         .state = .{},
     };
     defer arena.deinit();
-    const alloc = if (bench.use_arena) arena.allocator() else base_allocator;
+    var bump = huge_alloc.BumpAlloc.init(.{
+        .child_allocator = base_allocator,
+        .alloc_size_align_log2 = 20,
+    });
+    defer bump.deinit();
+    const alloc = if (bench.use_arena) arena.allocator() else bump.allocator();
 
     var original = try alloc.alloc([]u64, bench.num_bufs);
-    defer alloc.free(original);
 
     var rng = std.Random.DefaultPrng.init(blk: {
         var seed: u64 = undefined;
@@ -197,14 +201,8 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         }
     }
 
-    defer for (original) |b| {
-        alloc.free(b);
-    };
-
     var compressed = try alloc.alloc([]u8, bench.num_bufs);
-    defer alloc.free(compressed);
     var compressed_len = try alloc.alloc(usize, bench.num_bufs);
-    defer alloc.free(compressed_len);
 
     for (0..bench.num_bufs) |i| {
         const needed_size = zstd.ZSTD_compressBound(bench.buf_size * 8);
@@ -220,12 +218,7 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         compressed_len[i] = c_len;
     }
 
-    defer for (compressed) |b| {
-        alloc.free(b);
-    };
-
     var decompressed = try alloc.alloc([]u64, bench.num_bufs);
-    defer alloc.free(decompressed);
 
     for (0..bench.num_bufs) |i| {
         const buf = try alloc.alloc(u64, bench.buf_size);
@@ -238,12 +231,7 @@ fn doOneRunThread(thread_id: usize, bench: *const Bench) !u64 {
         }
     }
 
-    defer for (decompressed) |b| {
-        alloc.free(b);
-    };
-
     var accum = try alloc.alloc(u64, bench.buf_size);
-    defer alloc.free(accum);
 
     for (accum) |*x| {
         x.* = 0;
