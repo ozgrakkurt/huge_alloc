@@ -25,6 +25,9 @@ pub fn build(b: *std.Build) void {
     bench.linkLibrary(zstd_dependency.artifact("zstd"));
     bench.root_module.addImport("huge_alloc", huge_alloc_mod);
 
+    const install_bench = b.addInstallArtifact(bench, .{});
+    b.getInstallStep().dependOn(&install_bench.step);
+
     const run_bench = b.addRunArtifact(bench);
 
     const run_bench_step = b.step("runbench", "Run the benchmark application");

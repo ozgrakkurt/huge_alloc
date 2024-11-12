@@ -21,12 +21,9 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, TWO_MB * 16);
+    const alloc_size = align_up(size, TWO_MB);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
-    const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
-    const thp_section = page[ptr_alignment_offset..];
-    posix.madvise(@alignCast(thp_section.ptr), thp_section.len, posix.MADV.HUGEPAGE) catch {
+    posix.madvise(page.ptr, page.len, posix.MADV.HUGEPAGE) catch {
         posix.munmap(page);
         return null;
     };
@@ -80,8 +77,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, 16 * TWO_MB);
+    const alloc_size = align_up(size, TWO_MB);
     const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
@@ -90,15 +86,18 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
     if (size == 0) {
         return null;
     }
-    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = huge_page_flag != 0, .POPULATE = true };
+    const flags = linux.MAP{ .TYPE = .PRIVATE, .ANONYMOUS = true, .HUGETLB = huge_page_flag != 0, .POPULATE = true, .LOCKED = true };
     const flags_int: u32 = @bitCast(flags);
     const flags_f: linux.MAP = @bitCast(flags_int | huge_page_flag);
     const page = posix.mmap(null, size, posix.PROT.READ | posix.PROT.WRITE, flags_f, -1, 0) catch return null;
-    return @alignCast(page);
+    return page;
 }
 
 pub const Config = struct {
-    free_after: usize = std.math.maxInt(usize),
+    budget_log2: u8 = 30, // 1 GB
+    base_alloc: Allocator = std.heap.page_allocator,
+    page_alloc_vtable: PageAllocVTable = thp_alloc_vtable,
+    min_page_size_log2: u8 = 25, // 32 MB
 };
 
 pub const HugePageAlloc = struct {
@@ -106,19 +105,19 @@ pub const HugePageAlloc = struct {
     free_list: ArrayList(ArrayList([]u8)),
     page_alloc: PageAllocVTable,
     base_alloc: Allocator,
-    free_after: usize,
+    budget: usize,
+    total_size: usize,
+    min_page_size_log2: u8,
 
-    pub fn init(base_alloc: Allocator, v_table: PageAllocVTable) HugePageAlloc {
-        return HugePageAlloc.init_with_config(base_alloc, v_table, &.{});
-    }
-
-    pub fn init_with_config(base_alloc: Allocator, v_table: PageAllocVTable, cfg: *const Config) HugePageAlloc {
+    pub fn init(cfg: Config) HugePageAlloc {
         return HugePageAlloc{
-            .pages = ArrayList([]align(std.mem.page_size) u8).init(base_alloc),
-            .free_list = ArrayList(ArrayList([]u8)).init(base_alloc),
-            .page_alloc = v_table,
-            .base_alloc = base_alloc,
-            .free_after = cfg.free_after,
+            .pages = ArrayList([]align(std.mem.page_size) u8).init(cfg.base_alloc),
+            .free_list = ArrayList(ArrayList([]u8)).init(cfg.base_alloc),
+            .page_alloc = cfg.page_alloc_vtable,
+            .base_alloc = cfg.base_alloc,
+            .budget = usize_from_log2(cfg.budget_log2),
+            .total_size = 0,
+            .min_page_size_log2 = cfg.min_page_size_log2,
         };
     }
 
@@ -181,10 +180,11 @@ pub const HugePageAlloc = struct {
     fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u8, return_address: usize) ?[*]u8 {
         _ = return_address;
         const self: *HugePageAlloc = @ptrCast(@alignCast(ctx));
+
         if (size == 0) {
             return null;
         }
-        const align_to: usize = @as(usize, 1) << @as(Allocator.Log2Align, @intCast(log2_ptr_align));
+        const align_to: usize = usize_from_log2(log2_ptr_align);
         if (align_to > std.mem.page_size) {
             return null;
         }
@@ -193,7 +193,9 @@ pub const HugePageAlloc = struct {
             return ptr;
         }
 
-        const page = self.page_alloc.alloc_page(size) orelse return null;
+        const page_alloc_size = @max(size, usize_from_log2(self.min_page_size_log2));
+        const page = self.page_alloc.alloc_page(page_alloc_size) orelse return null;
+        self.total_size += page.len;
         const ptr = self.alloc_on_new_page(page, size) catch {
             self.page_alloc.free_page(page);
             return null;
@@ -289,17 +291,28 @@ pub const HugePageAlloc = struct {
                 }
             }
             if (found) {
-                const page = self.pages.items[page_idx];
-                if (range_to_insert.ptr == page.ptr and range_to_insert.len == page.len and self.should_free()) {
-                    self.page_alloc.free_page(page);
-                    _ = self.pages.swapRemove(page_idx);
-                    const free_l = self.free_list.swapRemove(page_idx);
-                    free_l.deinit();
-                } else {
-                    free_ranges.append(range_to_insert) catch unreachable;
-                }
+                free_ranges.append(range_to_insert) catch unreachable;
             } else {
                 free_ranges.append(buf) catch @panic("unrecoverable failure");
+            }
+            if (self.should_free()) {
+                var page_index: usize = 0;
+                while (page_index < self.pages.items.len) {
+                    const free_r = self.free_list.items[page_index];
+                    if (free_r.items.len == 1) {
+                        const range = free_ranges.items[0];
+                        const page = self.pages.items[page_index];
+                        if (range.ptr == page.ptr and range.len == page.len) {
+                            self.page_alloc.free_page(page);
+                            self.total_size -= page.len;
+                            _ = self.pages.swapRemove(page_index);
+                            const free_l = self.free_list.swapRemove(page_index);
+                            free_l.deinit();
+                            continue;
+                        }
+                    }
+                    page_index += 1;
+                }
             }
             return;
         }
@@ -308,24 +321,18 @@ pub const HugePageAlloc = struct {
     }
 
     fn should_free(self: *HugePageAlloc) bool {
-        var total_alloc_size = @as(usize, 0);
-
-        for (self.pages.items) |page| {
-            total_alloc_size +|= page.len;
-        }
-
-        return total_alloc_size >= self.free_after;
+        return self.total_size > self.budget;
     }
 
-    pub fn make_allocator(self: *HugePageAlloc) Allocator {
+    pub fn allocator(self: *HugePageAlloc) Allocator {
         return Allocator{
-            .vtable = &allocator_vtable,
+            .vtable = &huge_alloc_vtable,
             .ptr = self,
         };
     }
 };
 
-const allocator_vtable = Allocator.VTable{
+const huge_alloc_vtable = Allocator.VTable{
     .alloc = HugePageAlloc.alloc,
     .resize = HugePageAlloc.resize,
     .free = HugePageAlloc.free,
@@ -337,6 +344,123 @@ fn align_offset(pos: usize, align_to: usize) usize {
 
 fn align_up(v: usize, align_v: usize) usize {
     return (v + align_v - 1) & ~(align_v - 1);
+}
+
+pub const BumpConfig = struct {
+    child_allocator: Allocator,
+    budget_log2: u8 = @typeInfo(usize).int.bits - 1, // practically unlimited
+    min_alloc_size_log2: u8 = 20, // 1 MB
+};
+
+pub const BumpAlloc = struct {
+    child_allocator: Allocator,
+    allocs: ArrayList([]u8),
+    buf: []u8,
+    budget: usize,
+    min_alloc_size_log2: u8,
+    total_real_alloc: usize,
+    total_page_alloc: usize,
+    total_align_waste: usize,
+
+    pub fn init(cfg: BumpConfig) BumpAlloc {
+        return .{
+            .child_allocator = cfg.child_allocator,
+            .allocs = ArrayList([]u8).init(cfg.child_allocator),
+            .buf = &.{},
+            .budget = usize_from_log2(cfg.budget_log2),
+            .min_alloc_size_log2 = cfg.min_alloc_size_log2,
+            .total_real_alloc = 0,
+            .total_page_alloc = 0,
+            .total_align_waste = 0,
+        };
+    }
+
+    pub fn deinit(self: *BumpAlloc) void {
+        //std.debug.print("total_real_alloc={d},total_page_alloc={d},budget={d},total_align_waste={d}\n", .{ self.total_real_alloc, self.total_page_alloc, self.budget, self.total_align_waste });
+
+        for (self.allocs.items) |a| {
+            self.child_allocator.free(a);
+        }
+        self.allocs.deinit();
+    }
+
+    fn alloc(ctx: *anyopaque, size: usize, log2_ptr_align: u8, return_address: usize) ?[*]u8 {
+        _ = return_address;
+        const self: *BumpAlloc = @ptrCast(@alignCast(ctx));
+        if (size == 0) {
+            return null;
+        }
+
+        const align_to: usize = usize_from_log2(log2_ptr_align);
+        if (align_to > std.mem.page_size) {
+            return null;
+        }
+        const pos = @intFromPtr(self.buf.ptr);
+        const alignment_offset = align_offset(pos, align_to);
+
+        if (self.buf.len >= alignment_offset + size) {
+            self.total_align_waste += alignment_offset;
+            self.total_real_alloc += size;
+
+            const page = self.buf[alignment_offset .. alignment_offset + size];
+            self.buf = self.buf[alignment_offset + size ..];
+            return page.ptr;
+        } else {
+            const min_alloc_size = usize_from_log2(self.min_alloc_size_log2);
+            const alloc_size = @max(size, min_alloc_size);
+
+            if (alloc_size + self.total_page_alloc > self.budget) {
+                return null;
+            }
+
+            const new_buf = self.child_allocator.alloc(u8, alloc_size) catch return null;
+            self.buf = new_buf[size..];
+
+            self.allocs.append(new_buf) catch {
+                self.child_allocator.free(new_buf);
+                return null;
+            };
+
+            self.total_page_alloc += new_buf.len;
+            self.total_real_alloc += size;
+
+            return new_buf[0..size].ptr;
+        }
+    }
+
+    fn resize(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, return_address: usize) bool {
+        _ = ctx;
+        _ = buf;
+        _ = log2_buf_align;
+        _ = new_len;
+        _ = return_address;
+
+        return false;
+    }
+
+    pub fn free(ctx: *anyopaque, buf: []u8, log2_buf_align: u8, return_address: usize) void {
+        _ = ctx;
+        _ = buf;
+        _ = log2_buf_align;
+        _ = return_address;
+    }
+
+    pub fn allocator(self: *BumpAlloc) Allocator {
+        return Allocator{
+            .vtable = &bump_alloc_vtable,
+            .ptr = self,
+        };
+    }
+};
+
+const bump_alloc_vtable = Allocator.VTable{
+    .alloc = BumpAlloc.alloc,
+    .resize = BumpAlloc.resize,
+    .free = BumpAlloc.free,
+};
+
+fn usize_from_log2(log2align: u8) usize {
+    return @as(usize, 1) << @as(Allocator.Log2Align, @intCast(log2align));
 }
 
 test "alloc_thp" {
@@ -365,7 +489,7 @@ test "alloc_test_page" {
 }
 
 test "huge_page_alloc" {
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
 
     const ptr = HugePageAlloc.alloc(@ptrCast(&huge_alloc), 12, 4, 0) orelse @panic("failed alloc");
@@ -380,7 +504,7 @@ test "huge_page_alloc" {
     const buf3 = ptr3[0..13];
     HugePageAlloc.free(@ptrCast(&huge_alloc), buf3, 8, 0);
 
-    const alloc = huge_alloc.make_allocator();
+    const alloc = huge_alloc.allocator();
 
     var list = ArrayList(u64).init(alloc);
     try list.append(12);
@@ -418,14 +542,23 @@ test "align_offset" {
 }
 
 test "test allocator with std" {
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
-    const alloc = huge_alloc.make_allocator();
+    const alloc = huge_alloc.allocator();
 
     try std.heap.testAllocator(alloc);
     try std.heap.testAllocatorAligned(alloc);
     try std.heap.testAllocatorLargeAlignment(alloc);
     try std.heap.testAllocatorAlignedShrink(alloc);
+
+    var bump = BumpAlloc.init(.{ .child_allocator = alloc });
+    defer bump.deinit();
+    const bump_alloc = bump.allocator();
+
+    try std.heap.testAllocator(bump_alloc);
+    try std.heap.testAllocatorAligned(bump_alloc);
+    try std.heap.testAllocatorLargeAlignment(bump_alloc);
+    try std.heap.testAllocatorAlignedShrink(bump_alloc);
 }
 
 fn to_fuzz(input: []const u8) anyerror!void {
@@ -433,9 +566,9 @@ fn to_fuzz(input: []const u8) anyerror!void {
         return;
     }
 
-    var huge_alloc = HugePageAlloc.init(std.testing.allocator, test_page_alloc_vtable);
+    var huge_alloc = HugePageAlloc.init(.{ .base_alloc = std.testing.allocator, .page_alloc_vtable = test_page_alloc_vtable });
     defer huge_alloc.deinit();
-    const alloc = huge_alloc.make_allocator();
+    const alloc = huge_alloc.allocator();
 
     {
         var arrays = ArrayList([]u8).init(alloc);
