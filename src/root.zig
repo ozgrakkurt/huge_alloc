@@ -97,7 +97,7 @@ pub const Config = struct {
     budget_log2: u8 = 30, // 1 GB
     base_alloc: Allocator = std.heap.page_allocator,
     page_alloc_vtable: PageAllocVTable = thp_alloc_vtable,
-    min_page_size_log2: u8 = 25, // 32 MB
+    min_page_size_log2: u8 = 27, // 128 MB
 };
 
 pub const HugePageAlloc = struct {
