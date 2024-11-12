@@ -7,8 +7,6 @@ const linux = std.os.linux;
 const ONE_GB = 1 * 1024 * 1024 * 1024;
 const TWO_MB = 2 * 1024 * 1024;
 
-const MIN_ALLOC_SIZE = 16 * TWO_MB;
-
 pub const PageAllocVTable = struct {
     alloc_page: *const fn (size: usize) ?[]align(std.mem.page_size) u8,
     free_page: *const fn (page: []align(std.mem.page_size) u8) void,
@@ -23,12 +21,9 @@ fn alloc_thp(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, MIN_ALLOC_SIZE);
+    const alloc_size = align_up(size, TWO_MB);
     const page = mmap_wrapper(alloc_size, 0) orelse return null;
-    const ptr_alignment_offset = align_offset(@intFromPtr(page.ptr), TWO_MB);
-    const thp_section = page[ptr_alignment_offset..];
-    posix.madvise(@alignCast(thp_section.ptr), thp_section.len, posix.MADV.HUGEPAGE) catch {
+    posix.madvise(page.ptr, page.len, posix.MADV.HUGEPAGE) catch {
         posix.munmap(page);
         return null;
     };
@@ -82,8 +77,7 @@ fn alloc_huge_page_2mb(size: usize) ?[]align(std.mem.page_size) u8 {
     if (size == 0) {
         return null;
     }
-    const aligned_size = align_up(size, TWO_MB);
-    const alloc_size = @max(aligned_size, MIN_ALLOC_SIZE);
+    const alloc_size = align_up(size, TWO_MB);
     const page = mmap_wrapper(alloc_size, linux.HUGETLB_FLAG_ENCODE_2MB) orelse return null;
     return page;
 }
@@ -100,9 +94,10 @@ fn mmap_wrapper(size: usize, huge_page_flag: u32) ?[]align(std.mem.page_size) u8
 }
 
 pub const Config = struct {
-    free_after: usize = std.math.maxInt(usize),
+    budget_log2: u8 = 30, // 1 GB
     base_alloc: Allocator = std.heap.page_allocator,
     page_alloc_vtable: PageAllocVTable = thp_alloc_vtable,
+    min_page_size_log2: u8 = 25, // 32 MB
 };
 
 pub const HugePageAlloc = struct {
@@ -110,8 +105,9 @@ pub const HugePageAlloc = struct {
     free_list: ArrayList(ArrayList([]u8)),
     page_alloc: PageAllocVTable,
     base_alloc: Allocator,
-    free_after: usize,
+    budget: usize,
     total_size: usize,
+    min_page_size_log2: u8,
 
     pub fn init(cfg: Config) HugePageAlloc {
         return HugePageAlloc{
@@ -119,8 +115,9 @@ pub const HugePageAlloc = struct {
             .free_list = ArrayList(ArrayList([]u8)).init(cfg.base_alloc),
             .page_alloc = cfg.page_alloc_vtable,
             .base_alloc = cfg.base_alloc,
-            .free_after = cfg.free_after,
+            .budget = usize_from_log2(cfg.budget_log2),
             .total_size = 0,
+            .min_page_size_log2 = cfg.min_page_size_log2,
         };
     }
 
@@ -196,7 +193,8 @@ pub const HugePageAlloc = struct {
             return ptr;
         }
 
-        const page = self.page_alloc.alloc_page(size) orelse return null;
+        const page_alloc_size = @max(size, usize_from_log2(self.min_page_size_log2));
+        const page = self.page_alloc.alloc_page(page_alloc_size) orelse return null;
         self.total_size += page.len;
         const ptr = self.alloc_on_new_page(page, size) catch {
             self.page_alloc.free_page(page);
@@ -323,7 +321,7 @@ pub const HugePageAlloc = struct {
     }
 
     fn should_free(self: *HugePageAlloc) bool {
-        return self.total_size > self.free_after;
+        return self.total_size > self.budget;
     }
 
     pub fn allocator(self: *HugePageAlloc) Allocator {
@@ -350,25 +348,36 @@ fn align_up(v: usize, align_v: usize) usize {
 
 pub const BumpConfig = struct {
     child_allocator: Allocator,
-    budget: usize = std.math.maxInt(usize),
+    budget_log2: u8 = @typeInfo(usize).int.bits - 1, // practically unlimited
+    min_alloc_size_log2: u8 = 20, // 1 MB
 };
 
 pub const BumpAlloc = struct {
     child_allocator: Allocator,
     allocs: ArrayList([]u8),
-    budget: usize,
     buf: []u8,
+    budget: usize,
+    min_alloc_size_log2: u8,
+    total_real_alloc: usize,
+    total_page_alloc: usize,
+    total_align_waste: usize,
 
     pub fn init(cfg: BumpConfig) BumpAlloc {
         return .{
             .child_allocator = cfg.child_allocator,
             .allocs = ArrayList([]u8).init(cfg.child_allocator),
-            .budget = cfg.budget,
             .buf = &.{},
+            .budget = usize_from_log2(cfg.budget_log2),
+            .min_alloc_size_log2 = cfg.min_alloc_size_log2,
+            .total_real_alloc = 0,
+            .total_page_alloc = 0,
+            .total_align_waste = 0,
         };
     }
 
     pub fn deinit(self: *BumpAlloc) void {
+        //std.debug.print("total_real_alloc={d},total_page_alloc={d},budget={d},total_align_waste={d}\n", .{ self.total_real_alloc, self.total_page_alloc, self.budget, self.total_align_waste });
+
         for (self.allocs.items) |a| {
             self.child_allocator.free(a);
         }
@@ -381,6 +390,7 @@ pub const BumpAlloc = struct {
         if (size == 0) {
             return null;
         }
+
         const align_to: usize = usize_from_log2(log2_ptr_align);
         if (align_to > std.mem.page_size) {
             return null;
@@ -389,13 +399,17 @@ pub const BumpAlloc = struct {
         const alignment_offset = align_offset(pos, align_to);
 
         if (self.buf.len >= alignment_offset + size) {
+            self.total_align_waste += alignment_offset;
+            self.total_real_alloc += size;
+
             const page = self.buf[alignment_offset .. alignment_offset + size];
             self.buf = self.buf[alignment_offset + size ..];
             return page.ptr;
         } else {
-            const alloc_size = @max(MIN_ALLOC_SIZE / 8, size);
+            const min_alloc_size = usize_from_log2(self.min_alloc_size_log2);
+            const alloc_size = @max(size, min_alloc_size);
 
-            if (alloc_size > self.budget) {
+            if (alloc_size + self.total_page_alloc > self.budget) {
                 return null;
             }
 
@@ -407,7 +421,8 @@ pub const BumpAlloc = struct {
                 return null;
             };
 
-            self.budget -= alloc_size;
+            self.total_page_alloc += new_buf.len;
+            self.total_real_alloc += size;
 
             return new_buf[0..size].ptr;
         }
