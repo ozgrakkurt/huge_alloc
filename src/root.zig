@@ -348,7 +348,7 @@ fn align_up(v: usize, align_v: usize) usize {
 
 pub const BumpConfig = struct {
     child_allocator: Allocator,
-    budget_log2: u8 = @typeInfo(usize).int.bits - 1, // practically unlimited
+    budget_log2: u8 = @bitSizeOf(usize) - 1, // practically unlimited
     min_alloc_size_log2: u8 = 20, // 1 MB
 };
 
